@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1029067700075",
+    "project_id": "histoury-64ea3",
+    "storage_bucket": "histoury-64ea3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1029067700075:android:ddd86992e459aff24a3e2e",
+        "android_client_info": {
+          "package_name": "com.histoury.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAUyYJFBwm1NyMUUuPYW0Qcbyinik2iSUc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

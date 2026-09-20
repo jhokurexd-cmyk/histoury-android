@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <!--
+        Its own silhouette, not the colour artwork.
+
+        Android tints this layer a single colour for themed icons, so
+        pointing it at the full-colour foreground turned the whole H into one
+        flat blob. A silhouette keeps the letter readable.
+    -->
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+</adaptive-icon>
