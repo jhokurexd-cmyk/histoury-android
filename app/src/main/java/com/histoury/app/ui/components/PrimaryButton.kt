@@ -1,5 +1,7 @@
 package com.histoury.app.ui.components
 
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
@@ -10,6 +12,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
@@ -35,6 +38,38 @@ fun PrimaryButton(
     enabled: Boolean = true,
     isLoading: Boolean = false
 ) {
+    PrimaryButton(
+        onClick = onClick,
+        modifier = modifier,
+        enabled = enabled,
+        isLoading = isLoading
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+/**
+ * [PrimaryButton] with custom content — for a label that animates (e.g.
+ * onboarding's Next → Get Started) while keeping the exact same button.
+ *
+ * Every primary button dips to 97% while pressed (the same spring as the
+ * app's cards, via [pressScale]), so a tap is felt even before the ripple
+ * spreads. Spring, so a quick tap-and-release reverses smoothly.
+ */
+@Composable
+fun PrimaryButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    isLoading: Boolean = false,
+    content: @Composable RowScope.() -> Unit
+) {
+
+    val interactionSource = remember { MutableInteractionSource() }
 
     Button(
         onClick = {
@@ -45,6 +80,7 @@ fun PrimaryButton(
         modifier = modifier
             .fillMaxWidth()
             .height(56.dp)
+            .pressScale(interactionSource)
             .semantics {
                 if (isLoading) stateDescription = "Loading"
                 if (!enabled || isLoading) disabled()
@@ -56,7 +92,8 @@ fun PrimaryButton(
             contentColor = OnColor,
             disabledContainerColor = PrimarySoftStrong,
             disabledContentColor = OnColor
-        )
+        ),
+        interactionSource = interactionSource
     ) {
 
         if (isLoading) {
@@ -66,11 +103,7 @@ fun PrimaryButton(
                 modifier = Modifier.size(22.dp)
             )
         } else {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
+            content()
         }
     }
 }

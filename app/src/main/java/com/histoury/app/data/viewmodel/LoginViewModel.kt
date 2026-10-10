@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.histoury.app.data.repository.AccountStatus
 import com.histoury.app.data.repository.AuthRepository
+import com.histoury.app.util.Validators
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -68,10 +69,10 @@ class LoginViewModel : ViewModel() {
         // Ignore taps while a login is running or during the cooldown.
         if (currentState.isLoading || currentState.cooldownSeconds > 0) return
 
-        if (currentState.email.isBlank() || currentState.password.isBlank()) {
-            _uiState.value = currentState.copy(
-                errorMessage = "Please enter your email and password."
-            )
+        // Final check with the same rules the screen shows live.
+        val invalid = Validators.email(currentState.email) ?: Validators.loginPassword(currentState.password)
+        if (invalid != null) {
+            _uiState.value = currentState.copy(errorMessage = invalid)
             return
         }
 
@@ -94,11 +95,22 @@ class LoginViewModel : ViewModel() {
                     when (val status = authRepository.checkAccountStatus(user.uid)) {
 
                         is AccountStatus.Suspended -> {
-                            // Don't leave a suspended account signed in.
+                            // Keep a token for the appeal, then don't leave a
+                            // suspended account signed in.
+                            val appealToken = authRepository.appealTokenOrNull()
                             authRepository.logout()
                             _uiState.value = _uiState.value.copy(
                                 isLoading = false,
-                                suspension = status
+                                suspension = status.copy(appealToken = appealToken)
+                            )
+                        }
+
+                        AccountStatus.NoProfile -> {
+                            authRepository.logout()
+                            _uiState.value = _uiState.value.copy(
+                                isLoading = false,
+                                errorMessage = "This account's sign-up was never finished. " +
+                                    "Please register again with the same email to complete it."
                             )
                         }
 

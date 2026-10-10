@@ -5,7 +5,12 @@ import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleOut
+import com.histoury.app.ui.components.HistouryMotion
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Composable
@@ -30,6 +35,7 @@ import com.histoury.app.ui.screens.auth.ForgotPasswordScreen
 import com.histoury.app.ui.screens.auth.OtpVerificationScreen
 import com.histoury.app.ui.screens.auth.ResetPasswordScreen
 import com.histoury.app.ui.screens.explore.ExploreScreen
+import com.histoury.app.ui.screens.favorites.FavoritesScreen
 import com.histoury.app.ui.screens.gallery.GalleryScreen
 import com.histoury.app.ui.screens.history.VisitHistoryScreen
 import com.histoury.app.ui.screens.home.HomeScreen
@@ -45,6 +51,7 @@ import com.histoury.app.ui.screens.sitedetails.SiteDetailsScreen
 import com.histoury.app.ui.screens.sitelibrary.SiteLibraryScreen
 import com.histoury.app.ui.screens.placedetails.PlaceDetailsScreen
 import com.histoury.app.ui.screens.support.SupportScreen
+import com.histoury.app.ui.screens.tripcomplete.TripCompleteScreen
 
 /**
  * The five destinations reachable from the floating footer.
@@ -55,9 +62,12 @@ import com.histoury.app.ui.screens.support.SupportScreen
  * as the whole footer twitching sideways every time a tab is tapped.
  *
  * Switching between siblings isn't forward or backward motion anyway —
- * there's no direction for the slide to express — so tab-to-tab changes cut
- * instantly and the footer simply stays put. Every other navigation keeps
- * the slide, where it does mean something.
+ * there's no direction for the slide to express — so tab-to-tab changes
+ * crossfade instead. Both screens draw an identical footer in the same
+ * spot, so blending one into the other leaves the footer looking perfectly
+ * still while the content above it changes. Both halves run at once (no
+ * fade-through-blank), which is what keeps it from flashing the background.
+ * Every other navigation keeps the slide, where it does mean something.
  */
 private val TOP_LEVEL_ROUTES = setOf(
     Routes.Home.route,
@@ -66,6 +76,22 @@ private val TOP_LEVEL_ROUTES = setOf(
     Routes.History.route,
     Routes.Gallery.route
 )
+
+// "Fade through": the old tab fades out quickly, the new one fades in just
+// after with a very slight zoom. The bottom bar is no longer part of either
+// screen (it's drawn once, above them all), so nothing in it blends or
+// shakes; only the page content changes.
+private const val TAB_OUT_MS = 110
+private const val TAB_IN_MS = 240
+private const val TAB_IN_DELAY_MS = 60
+
+private val tabEnter: EnterTransition =
+    fadeIn(animationSpec = tween(TAB_IN_MS, delayMillis = TAB_IN_DELAY_MS, easing = LinearOutSlowInEasing)) +
+        scaleIn(
+            initialScale = 0.985f,
+            animationSpec = tween(TAB_IN_MS, delayMillis = TAB_IN_DELAY_MS, easing = LinearOutSlowInEasing)
+        )
+private val tabExit: ExitTransition = fadeOut(animationSpec = tween(TAB_OUT_MS, easing = FastOutLinearInEasing))
 
 private fun AnimatedContentTransitionScope<NavBackStackEntry>.isTabSwitch(): Boolean {
     val from = initialState.destination.route
@@ -87,7 +113,7 @@ fun NavGraph(
         // sluggish — replaces the abrupt default cut.
         enterTransition = {
             if (isTabSwitch()) {
-                EnterTransition.None
+                tabEnter
             } else {
                 fadeIn(animationSpec = tween(260)) +
                     slideInHorizontally(
@@ -98,7 +124,7 @@ fun NavGraph(
         },
         exitTransition = {
             if (isTabSwitch()) {
-                ExitTransition.None
+                tabExit
             } else {
                 fadeOut(animationSpec = tween(200)) +
                     slideOutHorizontally(
@@ -112,7 +138,7 @@ fun NavGraph(
         // twitch just moves to the return trip.
         popEnterTransition = {
             if (isTabSwitch()) {
-                EnterTransition.None
+                tabEnter
             } else {
                 fadeIn(animationSpec = tween(260)) +
                     slideInHorizontally(
@@ -123,7 +149,7 @@ fun NavGraph(
         },
         popExitTransition = {
             if (isTabSwitch()) {
-                ExitTransition.None
+                tabExit
             } else {
                 fadeOut(animationSpec = tween(200)) +
                     slideOutHorizontally(
@@ -138,7 +164,19 @@ fun NavGraph(
             AuthGate(navController)
         }
 
-        composable(Routes.Onboarding.route) {
+        composable(
+            route = Routes.Onboarding.route,
+            // Onboarding recedes (fades while settling back to 96%) as the
+            // form slides in over it with the normal forward transition, so
+            // Get Started reads as one continuous move into Login/Register.
+            exitTransition = {
+                fadeOut(tween(HistouryMotion.DurationMedium, easing = HistouryMotion.EaseOut)) +
+                    scaleOut(
+                        targetScale = 0.96f,
+                        animationSpec = tween(HistouryMotion.DurationMedium, easing = HistouryMotion.EaseOut)
+                    )
+            }
+        ) {
             OnboardingScreen(navController)
         }
 
@@ -228,6 +266,10 @@ fun NavGraph(
             DownloadsScreen(navController = navController)
         }
 
+        composable(Routes.Favorites.route) {
+            FavoritesScreen(navController = navController)
+        }
+
         // TEMPORARY — see the kdoc on Routes.StreetscapeDebug and on
         // StreetscapeDebugScreen itself.
         composable(Routes.StreetscapeDebug.route) {
@@ -263,15 +305,22 @@ fun NavGraph(
             arguments = listOf(
                 navArgument("siteId") {
                     type = NavType.StringType
+                },
+                navArgument("autoStart") {
+                    type = NavType.BoolType
+                    defaultValue = false
                 }
             )
         ) { backStackEntry ->
 
             val siteId = backStackEntry.arguments?.getString("siteId") ?: ""
 
+            val autoStart = backStackEntry.arguments?.getBoolean("autoStart") ?: false
+
             MapScreen(
                 siteId = siteId,
-                navController = navController
+                navController = navController,
+                autoStartNavigation = autoStart
             )
         }
 
@@ -288,6 +337,23 @@ fun NavGraph(
 
             ArrivalScreen(
                 siteId = siteId,
+                navController = navController
+            )
+        }
+
+        composable(
+            route = Routes.TripComplete.route,
+            arguments = listOf(
+                navArgument("itineraryId") {
+                    type = NavType.StringType
+                }
+            )
+        ) { backStackEntry ->
+
+            val itineraryId = backStackEntry.arguments?.getString("itineraryId") ?: ""
+
+            TripCompleteScreen(
+                itineraryId = itineraryId,
                 navController = navController
             )
         }
@@ -338,6 +404,20 @@ fun NavGraph(
         }
 
         composable(
+            route = Routes.SiteList.route,
+            arguments = listOf(
+                navArgument("mode") {
+                    type = NavType.StringType
+                }
+            )
+        ) { backStackEntry ->
+            com.histoury.app.ui.screens.sitelist.SiteListScreen(
+                mode = backStackEntry.arguments?.getString("mode") ?: "all",
+                navController = navController
+            )
+        }
+
+        composable(
             route = Routes.PlaceDetails.route,
             arguments = listOf(
                 navArgument("placeId") {
@@ -362,6 +442,7 @@ fun NavGraph(
                 },
                 navArgument("visitId") {
                     type = NavType.StringType
+                    defaultValue = ""
                 }
             )
         ) { backStackEntry ->

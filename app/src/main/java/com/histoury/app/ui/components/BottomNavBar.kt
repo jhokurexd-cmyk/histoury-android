@@ -1,6 +1,12 @@
 package com.histoury.app.ui.components
 
+import com.histoury.app.ui.tutorial.tutorialTarget
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -37,7 +43,12 @@ import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,6 +56,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -55,6 +70,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.currentBackStackEntryAsState
 import com.histoury.app.navigation.Routes
+import com.histoury.app.navigation.navigateToTab
 import com.histoury.app.theme.Background
 import com.histoury.app.theme.GlassEdge
 import com.histoury.app.theme.GlassBottom
@@ -95,6 +111,11 @@ private val BAR_BOTTOM_PADDING = 12.dp
 private val CENTER_BUTTON_SIZE = 60.dp
 private val TAB_WIDTH = 48.dp
 
+/** How far content must scroll in one direction before the bar reacts — stops small jitters from flickering it. */
+private val HIDE_SCROLL_THRESHOLD = 24.dp
+
+private const val HIDE_ANIMATION_MS = 220
+
 /**
  * How much vertical room the floating bar occupies, gesture inset included.
  *
@@ -119,6 +140,14 @@ val BottomNavBarInset: Dp
  *
  * Screens pass [BottomNavBarInset] as extra bottom contentPadding on
  * whatever scrolls.
+ *
+ * Hide on scroll, Messenger-style: scrolling the content down slides the
+ * bar off the bottom edge so there's more room to browse; scrolling back
+ * up (even slightly) brings it straight back. It listens to the nested
+ * scroll of whatever the screen scrolls — LazyColumn, verticalScroll, grids
+ * — so no screen needs its own wiring. Only scroll the content actually
+ * performed counts, so dragging a list too short to scroll never hides it,
+ * and it always reappears when switching tabs.
  */
 @Composable
 fun BottomNavScaffold(
@@ -128,7 +157,92 @@ fun BottomNavScaffold(
     content: @Composable (PaddingValues) -> Unit
 ) {
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    // With the app-wide bar (see SharedBottomNavBar) this screen doesn't
+    // draw a bar of its own; it only reports scrolling and its centre-button
+    // action to the shared one.
+    val shared = LocalSharedNavBar.current
+
+    var localBarVisible by remember { mutableStateOf(true) }
+    val isBarVisible = if (shared) SharedNavBar.visible else localBarVisible
+    fun setBarVisible(value: Boolean) {
+        if (shared) SharedNavBar.visible = value else localBarVisible = value
+    }
+
+    val backStackEntry by navController.currentBackStackEntryAsState()
+
+    // A freshly opened tab should never start with its navigation hidden.
+    LaunchedEffect(backStackEntry?.destination?.route) {
+        setBarVisible(true)
+    }
+
+    if (shared) {
+        // Tells the shared bar a tab screen is actually showing one. A tab
+        // route can also show a full-screen state without it (the itinerary
+        // builder), and the bar must not float over that.
+        DisposableEffect(Unit) {
+            SharedNavBar.scaffoldCount++
+            onDispose { SharedNavBar.scaffoldCount-- }
+        }
+
+        val latestCenterAction by rememberUpdatedState(onCenterReselected)
+        val hasCenterAction = onCenterReselected != null
+        DisposableEffect(hasCenterAction) {
+            val action: (() -> Unit)? = if (hasCenterAction) {
+                { latestCenterAction?.invoke() }
+            } else {
+                null
+            }
+            SharedNavBar.centerReselected = action
+            onDispose {
+                if (SharedNavBar.centerReselected === action) SharedNavBar.centerReselected = null
+            }
+        }
+    }
+
+    val thresholdPx = with(LocalDensity.current) { HIDE_SCROLL_THRESHOLD.toPx() }
+
+    val hideOnScroll = remember(thresholdPx) {
+        object : NestedScrollConnection {
+
+            // Distance scrolled in the current direction. Reset whenever the
+            // direction flips, so one small reversal is enough to react.
+            private var travelled = 0f
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+
+                val dy = consumed.y
+
+                if (dy == 0f) {
+                    // Pulling down while already at the very top: nothing
+                    // scrolled, but the intent to see the bar is clear.
+                    if (available.y > 0f) setBarVisible(true)
+                    return Offset.Zero
+                }
+
+                if ((dy > 0f) != (travelled > 0f)) travelled = 0f
+                travelled += dy
+
+                // Negative = content moving up = the visitor scrolling down.
+                if (travelled < -thresholdPx) {
+                    setBarVisible(false)
+                } else if (travelled > thresholdPx) {
+                    setBarVisible(true)
+                }
+
+                return Offset.Zero
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .nestedScroll(hideOnScroll)
+    ) {
 
         Scaffold(
             containerColor = containerColor,
@@ -142,11 +256,26 @@ fun BottomNavScaffold(
             content(padding)
         }
 
-        BottomNavBar(
-            navController = navController,
-            onCenterReselected = onCenterReselected,
-            modifier = Modifier.align(Alignment.BottomCenter)
-        )
+        if (!shared) AnimatedVisibility(
+            visible = isBarVisible,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            // Slides by its own full height (shadow and centre button
+            // included), so it leaves the screen cleanly instead of leaving
+            // the raised plus peeking over the edge.
+            enter = slideInVertically(
+                animationSpec = tween(HIDE_ANIMATION_MS),
+                initialOffsetY = { it }
+            ) + fadeIn(tween(HIDE_ANIMATION_MS)),
+            exit = slideOutVertically(
+                animationSpec = tween(HIDE_ANIMATION_MS),
+                targetOffsetY = { it }
+            ) + fadeOut(tween(HIDE_ANIMATION_MS))
+        ) {
+            BottomNavBar(
+                navController = navController,
+                onCenterReselected = onCenterReselected
+            )
+        }
     }
 }
 
@@ -183,13 +312,7 @@ fun BottomNavBar(
 
     fun switchTo(route: String) {
         if (currentRoute != route) {
-            navController.navigate(route) {
-                popUpTo(Routes.Home.route) {
-                    saveState = true
-                }
-                launchSingleTop = true
-                restoreState = true
-            }
+            navController.navigateToTab(route)
         }
     }
 
@@ -331,6 +454,7 @@ private fun NavIconTab(
 
     Box(
         modifier = Modifier
+            .tutorialTarget("nav_" + item.route)
             .width(TAB_WIDTH)
             .height(44.dp)
             .clip(RoundedCornerShape(50))
@@ -391,6 +515,7 @@ private fun CenterItineraryButton(
 
         Box(
             modifier = Modifier
+                .tutorialTarget("nav_" + Routes.Itinerary.route)
                 .size(CENTER_BUTTON_SIZE)
                 .scale(haloScale)
                 .shadow(elevation = 10.dp, shape = CircleShape)
@@ -426,5 +551,72 @@ private fun CenterItineraryButton(
                     .semantics { selected = isSelected }
             )
         }
+    }
+}
+
+
+// ----------------------------------------------------------------------------
+// One bar for the whole app
+//
+// Each tab used to draw its own copy of the bar, so switching tabs
+// crossfaded two bars into each other: the shadow dimmed and came back, the
+// highlight capsule animated from two different starting points at once,
+// and a bar hidden by scrolling on one tab slid in on the next — the
+// "shaky" navbar. Now MainActivity draws a single bar above every screen;
+// it never leaves during a tab switch, and only its highlight moves.
+// ----------------------------------------------------------------------------
+
+/** State the tab screens share with the single app-wide bar. */
+object SharedNavBar {
+    /** False while the current tab has hidden the bar by scrolling down. */
+    var visible by mutableStateOf(true)
+
+    /** How many BottomNavScaffolds are on screen (two during a tab crossfade). */
+    var scaffoldCount by mutableStateOf(0)
+
+    /** The Itinerary screen's "new itinerary" action for a second tap on the centre button. */
+    var centerReselected by mutableStateOf<(() -> Unit)?>(null)
+}
+
+/** True inside [SharedBottomNavBar]'s host: tab screens then leave the bar to it. */
+val LocalSharedNavBar = androidx.compose.runtime.staticCompositionLocalOf { false }
+
+private val SHARED_BAR_ROUTES = setOf(
+    Routes.Home.route,
+    Routes.MapOverview.route,
+    Routes.Itinerary.route,
+    Routes.History.route,
+    Routes.Gallery.route
+)
+
+/**
+ * The app-wide bottom bar. Place it once, over the NavHost, and provide
+ * [LocalSharedNavBar] = true to the NavHost so tab screens stop drawing
+ * their own.
+ */
+@Composable
+fun SharedBottomNavBar(
+    navController: NavHostController,
+    modifier: Modifier = Modifier
+) {
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val onTab = backStackEntry?.destination?.route in SHARED_BAR_ROUTES
+
+    AnimatedVisibility(
+        visible = onTab && SharedNavBar.scaffoldCount > 0 && SharedNavBar.visible,
+        modifier = modifier,
+        enter = slideInVertically(
+            animationSpec = tween(HIDE_ANIMATION_MS),
+            initialOffsetY = { it }
+        ) + fadeIn(tween(HIDE_ANIMATION_MS)),
+        exit = slideOutVertically(
+            animationSpec = tween(HIDE_ANIMATION_MS),
+            targetOffsetY = { it }
+        ) + fadeOut(tween(HIDE_ANIMATION_MS))
+    ) {
+        BottomNavBar(
+            navController = navController,
+            onCenterReselected = { SharedNavBar.centerReselected?.invoke() }
+        )
     }
 }

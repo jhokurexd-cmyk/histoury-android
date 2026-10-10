@@ -3,7 +3,6 @@ package com.histoury.app.data.repository
 import com.google.firebase.auth.EmailAuthProvider
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
-import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.firestore.FirebaseFirestore
 import com.histoury.app.util.FirebaseErrorMessages
 import kotlinx.coroutines.channels.awaitClose
@@ -23,11 +22,27 @@ import kotlinx.coroutines.tasks.await
  */
 sealed class AccountStatus {
     object Active : AccountStatus()
+
+    /**
+     * A login with no users/{uid} profile. Profiles are only created by the
+     * registerWithOtp Cloud Function, after the emailed code is verified, so
+     * this is a login made by calling Firebase Auth directly (skipping email
+     * verification) or a sign-up that never finished. It isn't a usable
+     * account: the app signs it out. Registering again with the same email
+     * completes it.
+     */
+    object NoProfile : AccountStatus()
+
     data class Suspended(
         val uid: String,
         val reason: String,
         val note: String?,
-        val expiresAtMillis: Long?
+        val expiresAtMillis: Long?,
+        // The session's Firebase ID token, captured just before the app
+        // signs the suspended user out. submitSuspensionAppeal verifies it
+        // to know who is appealing (a bare uid could be anyone's). Valid for
+        // up to an hour; null if it couldn't be read.
+        val appealToken: String? = null
     ) : AccountStatus()
 }
 
@@ -76,6 +91,10 @@ class AuthRepository {
                 .get(com.google.firebase.firestore.Source.SERVER)
                 .await()
 
+            // A confirmed "no such document" from the server — not a failed
+            // read, which lands in the catch below and fails open.
+            if (!snap.exists()) return AccountStatus.NoProfile
+
             toAccountStatus(uid, snap.getString("status"), snap.get("suspension") as? Map<*, *>)
 
         } catch (_: Exception) {
@@ -97,8 +116,9 @@ class AuthRepository {
         val registration = db.collection("users").document(uid)
             .addSnapshotListener { snap, error ->
 
-                if (error != null || snap == null || !snap.exists()) {
-                    trySend(AccountStatus.Active)
+                // A read error says nothing about the account (offline,
+                // a transient failure): keep the current state.
+                if (error != null || snap == null) {
                     return@addSnapshotListener
                 }
 
@@ -108,6 +128,14 @@ class AuthRepository {
                 // legitimately reactivated user — suspension is drastic
                 // enough that we only ever act on server-confirmed data.
                 if (snap.metadata.isFromCache) {
+                    return@addSnapshotListener
+                }
+
+                // The server says the profile is gone: an admin deleted the
+                // account. It used to count as Active, leaving the person
+                // signed in until their token expired.
+                if (!snap.exists()) {
+                    trySend(AccountStatus.NoProfile)
                     return@addSnapshotListener
                 }
 
@@ -156,48 +184,59 @@ class AuthRepository {
         }
     }
 
+    /**
+     * Creates the account through the registerWithOtp Cloud Function — which
+     * checks the emailed [code] and creates the login AND the profile
+     * together, all-or-nothing — then signs in.
+     *
+     * The app used to create the login itself (createUserWithEmailAndPassword)
+     * and then write the profile. That let anyone skip email verification by
+     * calling Firebase directly, and a connection drop between the two steps
+     * left a login with no profile whose email then counted as "already
+     * registered", so the visitor could never retry.
+     */
     suspend fun register(
         firstName: String,
         lastName: String,
         email: String,
-        password: String
+        password: String,
+        code: String
     ): Result<FirebaseUser> {
 
-        return try {
+        val created = EmailOtpRepository().registerWithOtp(
+            firstName = firstName,
+            lastName = lastName,
+            email = email,
+            password = password,
+            code = code
+        )
 
-            val result = firebaseAuth
-                .createUserWithEmailAndPassword(email, password)
-                .await()
-
-            val user = result.user
-                ?: return Result.failure(Exception("Registration failed. Please try again."))
-
-            // Sync the name to the Firebase Auth profile so it's available
-            // locally (via currentUser.displayName) on future app restarts.
-            val profileUpdates = UserProfileChangeRequest.Builder()
-                .setDisplayName("$firstName $lastName".trim())
-                .build()
-            user.updateProfile(profileUpdates).await()
-
-            val userDoc = hashMapOf(
-                "uid" to user.uid,
-                "firstName" to firstName,
-                "lastName" to lastName,
-                "email" to email,
-                "role" to "tourist",
-                "profileImage" to "",
-                "status" to "active",
-                "createdAt" to com.google.firebase.Timestamp.now(),
-                "updatedAt" to com.google.firebase.Timestamp.now()
-            )
-
-            db.collection("users").document(user.uid).set(userDoc).await()
-
-            Result.success(user)
-
-        } catch (e: Exception) {
-            Result.failure(Exception(FirebaseErrorMessages.friendly(e)))
+        if (created.isFailure) {
+            return Result.failure(created.exceptionOrNull() ?: Exception("Registration failed. Please try again."))
         }
+
+        // The account exists now; if this sign-in fails (e.g. the signal
+        // dropped), the visitor can simply log in.
+        return login(email, password).fold(
+            onSuccess = { Result.success(it) },
+            onFailure = {
+                Result.failure(Exception("Your account was created. Please log in to continue."))
+            }
+        )
+    }
+
+    /**
+     * The signed-in user's ID token for a suspension appeal, or null. Call
+     * it BEFORE signing a suspended user out. Uses the cached token when it
+     * is still valid; refreshing one fails once the suspension has revoked
+     * the session, and then null means "log in again to appeal".
+     */
+    suspend fun appealTokenOrNull(): String? = try {
+        kotlinx.coroutines.withTimeoutOrNull(3_000L) {
+            firebaseAuth.currentUser?.getIdToken(false)?.await()?.token
+        }
+    } catch (_: Exception) {
+        null
     }
 
     fun logout() {

@@ -1,5 +1,6 @@
 package com.histoury.app.ui.screens.auth
 
+import com.histoury.app.navigation.navigateSafely
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -31,6 +32,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import com.histoury.app.ui.components.CharacterCounter
+import com.histoury.app.ui.components.FieldErrorText
+import com.histoury.app.util.Validators
 import com.histoury.app.data.repository.AppealRepository
 import com.histoury.app.data.repository.SuspensionInfoHolder
 import com.histoury.app.navigation.Routes
@@ -105,6 +109,8 @@ fun SuspendedScreen(
     var isSubmitting by remember { mutableStateOf(false) }
     var appealSubmitted by remember { mutableStateOf(false) }
     var appealError by remember { mutableStateOf<String?>(null) }
+    var appealTouched by remember { mutableStateOf(false) }
+    var appealAttempted by remember { mutableStateOf(false) }
 
     val coroutineScope = rememberCoroutineScope()
     val appealRepository = remember { AppealRepository() }
@@ -113,11 +119,13 @@ fun SuspendedScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(SurfaceSoft)
+            .statusBarsPadding()
+            .imePadding()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 28.dp)
     ) {
 
-        Spacer(Modifier.height(56.dp))
+        Spacer(Modifier.height(40.dp))
 
         Box(
             modifier = Modifier
@@ -275,12 +283,17 @@ fun SuspendedScreen(
 
                 Spacer(Modifier.height(10.dp))
 
+                val appealTextError = Validators.text(appealMessage, "Your message", min = 10, max = APPEAL_MAX)
+                val shownAppealError = if (appealTouched || appealAttempted) appealTextError else null
+
                 OutlinedTextField(
                     value = appealMessage,
                     onValueChange = {
                         appealMessage = it
                         appealError = null
+                        appealTouched = true
                     },
+                    isError = shownAppealError != null,
                     placeholder = { Text("Tell us why you think this suspension should be reviewed...") },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -299,6 +312,9 @@ fun SuspendedScreen(
                     )
                 )
 
+                CharacterCounter(appealMessage.trim().length, APPEAL_MAX)
+                FieldErrorText(shownAppealError)
+
                 if (appealError != null) {
 
                     Spacer(Modifier.height(10.dp))
@@ -316,15 +332,19 @@ fun SuspendedScreen(
                     isLoading = isSubmitting,
                     onClick = {
 
-                        val uid = info?.uid
+                        val appealToken = info?.appealToken
 
-                        if (appealMessage.trim().isBlank()) {
-                            appealError = "Please enter a message before submitting."
+                        // Final check with the same rule shown live above.
+                        appealAttempted = true
+                        if (appealTextError != null) {
                             return@PrimaryButton
                         }
 
-                        if (uid == null) {
-                            appealError = "Couldn't identify your account. Please try logging in again first."
+                        // No token (e.g. the app was reopened after the
+                        // session had already expired): logging in again
+                        // brings them back here with a fresh one.
+                        if (appealToken == null) {
+                            appealError = "Please log in again to send an appeal."
                             return@PrimaryButton
                         }
 
@@ -333,7 +353,7 @@ fun SuspendedScreen(
 
                         coroutineScope.launch {
 
-                            val result = appealRepository.submitAppeal(uid, appealMessage)
+                            val result = appealRepository.submitAppeal(appealToken, appealMessage)
 
                             isSubmitting = false
 
@@ -370,8 +390,10 @@ fun SuspendedScreen(
 
                 SuspensionInfoHolder.clear()
 
-                navController.navigate(Routes.Login.route) {
-                    popUpTo(Routes.Suspended.route) {
+                // Reset to a single Login. Coming here from Login used to
+                // leave the old Login underneath the new one.
+                navController.navigateSafely(Routes.Login.route) {
+                    popUpTo(navController.graph.id) {
                         inclusive = true
                     }
                 }
@@ -381,3 +403,6 @@ fun SuspendedScreen(
         Spacer(Modifier.height(32.dp))
     }
 }
+
+/** Longest appeal message accepted. */
+private const val APPEAL_MAX = 1000

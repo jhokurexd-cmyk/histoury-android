@@ -1,5 +1,7 @@
 package com.histoury.app.ui.screens.rankings
 
+import com.histoury.app.navigation.safePopBackStack
+import com.histoury.app.navigation.navigateSafely
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -11,6 +13,23 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.ThumbUp
+import androidx.compose.material.icons.outlined.Flag
+import androidx.compose.material.icons.outlined.ThumbUp
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import com.histoury.app.theme.Danger
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.CircularProgressIndicator
@@ -34,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -46,6 +66,10 @@ import com.histoury.app.data.model.Review
 import com.histoury.app.data.viewmodel.RankingSortMode
 import com.histoury.app.data.viewmodel.RankingsViewModel
 import com.histoury.app.navigation.Routes
+import com.histoury.app.ui.components.HeroIconButton
+import com.histoury.app.ui.components.ReviewSummaryCard
+import com.histoury.app.ui.components.SiteReviewsList
+import com.histoury.app.ui.components.SiteReviewsDialogs
 import com.histoury.app.theme.AccentGold
 import com.histoury.app.theme.CardSurface
 import com.histoury.app.theme.Outline
@@ -91,27 +115,11 @@ fun RankingsScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
 
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .shadow(elevation = 2.dp, shape = CircleShape)
-                        .clip(CircleShape)
-                        .background(CardSurface)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) {
-                            navController.popBackStack()
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = Primary,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
+                HeroIconButton(
+                    icon = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    onClick = { navController.safePopBackStack() }
+                )
 
                 Spacer(Modifier.width(14.dp))
 
@@ -207,7 +215,7 @@ fun RankingsScreen(
                         rank = index + 1,
                         site = site,
                         onViewClick = {
-                            navController.navigate(
+                            navController.navigateSafely(
                                 Routes.Map.createRoute(site.documentId)
                             )
                         },
@@ -226,6 +234,9 @@ fun RankingsScreen(
                             colors = listOf(Primary, PrimaryDark)
                         )
                     )
+                    // Coloured bar runs to the screen edge; its numbers stay
+                    // above the gesture / navigation bar.
+                    .navigationBarsPadding()
                     .padding(vertical = 18.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
@@ -252,6 +263,8 @@ fun RankingsScreen(
 
     val reviewsSite = uiState.reviewsSite
 
+    val reviewsState by rankingsViewModel.reviews.state.collectAsState()
+
     if (reviewsSite != null) {
 
         ModalBottomSheet(
@@ -261,11 +274,15 @@ fun RankingsScreen(
 
             SiteReviewsSheetContent(
                 site = reviewsSite,
-                reviews = uiState.siteReviews,
-                isLoading = uiState.isLoadingReviews
+                state = reviewsState,
+                onToggleHelpful = { review -> rankingsViewModel.reviews.toggleHelpful(review) },
+                onReport = { review -> rankingsViewModel.reviews.openReport(review) },
+                onSortChange = { sort -> rankingsViewModel.reviews.setSort(sort) }
             )
         }
     }
+
+    SiteReviewsDialogs(state = reviewsState, controller = rankingsViewModel.reviews)
 }
 
 @Composable
@@ -395,79 +412,89 @@ private fun RankingRow(
                 fontWeight = FontWeight.Bold,
                 fontSize = 14.sp,
                 color = TextPrimary,
-                maxLines = 1
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
 
             Spacer(Modifier.height(4.dp))
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-
-                Icon(
-                    Icons.Default.Star,
-                    contentDescription = null,
-                    tint = RatingStar,
-                    modifier = Modifier.size(13.dp)
-                )
-
-                Spacer(Modifier.width(2.dp))
-
+            if (site.reviewCount == 0) {
                 Text(
-                    text = "%.1f".format(site.averageRating),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    color = TextPrimary
+                    text = "No reviews yet",
+                    color = TextTertiary,
+                    fontSize = 11.5.sp
                 )
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
 
-                Spacer(Modifier.width(4.dp))
+                    Icon(
+                        Icons.Default.Star,
+                        contentDescription = null,
+                        tint = RatingStar,
+                        modifier = Modifier.size(13.dp)
+                    )
 
-                Text(
-                    text = "(${site.reviewCount})",
-                    color = TextSecondary,
-                    fontSize = 11.sp
-                )
+                    Spacer(Modifier.width(2.dp))
+
+                    Text(
+                        text = "%.1f".format(site.averageRating),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        color = TextPrimary
+                    )
+
+                    Spacer(Modifier.width(4.dp))
+
+                    Text(
+                        text = "(${site.reviewCount})",
+                        color = TextSecondary,
+                        fontSize = 11.sp
+                    )
+                }
             }
 
             Spacer(Modifier.height(8.dp))
 
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
 
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = Primary,
-                    modifier = Modifier.clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onViewClick
-                    )
-                ) {
-                    Text(
-                        text = "View",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                    )
-                }
+                RankingAction(
+                    text = "View",
+                    filled = true,
+                    onClick = onViewClick
+                )
 
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = SurfaceSoft,
-                    modifier = Modifier.clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onReviewsClick
-                    )
-                ) {
-                    Text(
-                        text = "Reviews",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                    )
-                }
+                RankingAction(
+                    text = "Reviews",
+                    filled = false,
+                    onClick = onReviewsClick
+                )
             }
         }
+    }
+}
+
+/** Compact pill action on a ranking row, tall enough to tap comfortably. */
+@Composable
+private fun RankingAction(
+    text: String,
+    filled: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .heightIn(min = 36.dp)
+            .clip(RoundedCornerShape(50))
+            .background(if (filled) Primary else SurfaceSoft)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (filled) Color.White else TextPrimary
+        )
     }
 }
 
@@ -498,50 +525,54 @@ private fun RankingsStat(value: String, label: String) {
 @Composable
 private fun SiteReviewsSheetContent(
     site: HistoricalSite,
-    reviews: List<Review>,
-    isLoading: Boolean
+    state: com.histoury.app.data.reviews.SiteReviewsState,
+    onToggleHelpful: (Review) -> Unit,
+    onReport: (Review) -> Unit,
+    onSortChange: (com.histoury.app.data.reviews.ReviewSort) -> Unit
 ) {
 
-    // One LazyColumn for everything: wraps when short, caps + scrolls when
-    // long, so the sheet height always behaves.
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(max = 560.dp),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 28.dp)
-    ) {
+    SiteReviewsList(
+        state = state,
+        onToggleHelpful = onToggleHelpful,
+        onReport = onReport,
+        header = {
+            Column {
 
-        item {
+                Text(
+                    text = site.siteName,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
 
-            Text(
-                text = site.siteName,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary
-            )
+                Text(
+                    text = "What visitors are saying",
+                    fontSize = 12.sp,
+                    color = TextSecondary
+                )
 
-            Text(
-                text = "What visitors are saying",
-                fontSize = 12.sp,
-                color = TextSecondary
-            )
+                Spacer(Modifier.height(16.dp))
 
-            Spacer(Modifier.height(16.dp))
+                ReviewSummaryCard(site = site, reviews = state.reviews)
 
-            ReviewSummaryCard(site = site, reviews = reviews)
+                Spacer(Modifier.height(16.dp))
 
-            Spacer(Modifier.height(16.dp))
+                Divider(color = SurfaceSoft)
 
-            Divider(color = SurfaceSoft)
+                Spacer(Modifier.height(8.dp))
 
-            Spacer(Modifier.height(8.dp))
-        }
+                // Only worth offering once there's more than one review to order.
+                if (state.reviews.size > 1) {
+                    com.histoury.app.ui.components.ReviewSortChips(
+                        selected = state.sort,
+                        onSelect = onSortChange,
+                        modifier = Modifier.padding(vertical = 6.dp)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
 
-        when {
-
-            isLoading -> {
-                item {
-                    Box(
+                when {
+                    state.isLoading && state.reviews.isEmpty() -> Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 40.dp),
@@ -549,27 +580,27 @@ private fun SiteReviewsSheetContent(
                     ) {
                         CircularProgressIndicator(color = Primary)
                     }
-                }
-            }
 
-            reviews.isEmpty() -> {
-                item {
-                    Column(
+                    state.loadFailed -> Text(
+                        text = "Couldn't load reviews. Check your connection.",
+                        fontSize = 13.sp,
+                        color = TextSecondary,
+                        modifier = Modifier.padding(vertical = 24.dp)
+                    )
+
+                    state.reviews.isEmpty() -> Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 36.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-
                         Text(
                             text = "No reviews yet",
                             fontWeight = FontWeight.Bold,
                             fontSize = 15.sp,
                             color = TextPrimary
                         )
-
                         Spacer(Modifier.height(4.dp))
-
                         Text(
                             text = "Visit ${site.siteName} and be the first to share your experience!",
                             fontSize = 12.sp,
@@ -579,267 +610,6 @@ private fun SiteReviewsSheetContent(
                     }
                 }
             }
-
-            else -> {
-                items(reviews.size) { index ->
-                    ReviewCard(review = reviews[index])
-                    if (index != reviews.lastIndex) {
-                        Spacer(Modifier.height(10.dp))
-                    }
-                }
-            }
         }
-    }
-}
-
-@Composable
-private fun ReviewSummaryCard(
-    site: HistoricalSite,
-    reviews: List<Review>
-) {
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(PrimarySoft)
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-
-        // Big average + stars + count
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-
-            Text(
-                text = "%.1f".format(site.averageRating),
-                fontSize = 34.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary
-            )
-
-            StarRow(rating = site.averageRating, starSize = 13)
-
-            Spacer(Modifier.height(2.dp))
-
-            Text(
-                text = "${site.reviewCount} review${if (site.reviewCount == 1) "" else "s"}",
-                fontSize = 11.sp,
-                color = TextSecondary
-            )
-        }
-
-        Spacer(Modifier.width(20.dp))
-
-        // 5..1 star distribution bars, computed from the loaded reviews
-        Column(modifier = Modifier.weight(1f)) {
-
-            for (star in 5 downTo 1) {
-
-                val count = reviews.count { review ->
-                    review.rating.toInt() == star
-                }
-
-                val fraction = if (reviews.isEmpty()) {
-                    0f
-                } else {
-                    count.toFloat() / reviews.size
-                }
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-
-                    Text(
-                        text = star.toString(),
-                        fontSize = 10.sp,
-                        color = TextSecondary,
-                        modifier = Modifier.width(10.dp)
-                    )
-
-                    Icon(
-                        imageVector = Icons.Default.Star,
-                        contentDescription = null,
-                        tint = RatingStar,
-                        modifier = Modifier.size(10.dp)
-                    )
-
-                    Spacer(Modifier.width(6.dp))
-
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(6.dp)
-                            .clip(RoundedCornerShape(50))
-                            .background(CardSurface)
-                    ) {
-                        if (fraction > 0f) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxHeight()
-                                    .fillMaxWidth(fraction)
-                                    .clip(RoundedCornerShape(50))
-                                    .background(RatingStar)
-                            )
-                        }
-                    }
-
-                    Spacer(Modifier.width(6.dp))
-
-                    Text(
-                        text = count.toString(),
-                        fontSize = 10.sp,
-                        color = TextSecondary,
-                        modifier = Modifier.width(16.dp)
-                    )
-                }
-
-                if (star != 1) {
-                    Spacer(Modifier.height(4.dp))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ReviewCard(review: Review) {
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(SurfaceSoft)
-            .padding(14.dp)
-    ) {
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-
-            // Initial avatar
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(PrimarySoft),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = review.userName.trim()
-                        .firstOrNull()?.uppercase() ?: "?",
-                    color = Primary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
-                )
-            }
-
-            Spacer(Modifier.width(10.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-
-                    Text(
-                        text = review.userName.ifBlank { "Tourist User" },
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        color = TextPrimary,
-                        maxLines = 1,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-
-                    if (review.edited) {
-
-                        Spacer(Modifier.width(6.dp))
-
-                        Text(
-                            text = "edited",
-                            fontSize = 10.sp,
-                            color = TextTertiary
-                        )
-                    }
-                }
-
-                Text(
-                    text = formatReviewDate(review.createdAt),
-                    fontSize = 11.sp,
-                    color = TextSecondary
-                )
-            }
-
-            StarRow(rating = review.rating, starSize = 12)
-        }
-
-        if (review.reviewText.isNotBlank()) {
-
-            Spacer(Modifier.height(10.dp))
-
-            Text(
-                text = review.reviewText,
-                fontSize = 13.sp,
-                color = TextSecondary,
-                lineHeight = 19.sp
-            )
-        }
-
-        if (review.likes > 0) {
-
-            Spacer(Modifier.height(8.dp))
-
-            Text(
-                text = "\uD83D\uDC4D ${review.likes} helpful",
-                fontSize = 11.sp,
-                color = TextSecondary
-            )
-        }
-    }
-}
-
-@Composable
-private fun StarRow(rating: Double, starSize: Int) {
-
-    val filledStars = rating.toInt().coerceIn(0, 5)
-
-    Row {
-        repeat(5) { index ->
-            Icon(
-                imageVector = Icons.Default.Star,
-                contentDescription = null,
-                tint = if (index < filledStars) {
-                    RatingStar
-                } else {
-                    Outline
-                },
-                modifier = Modifier.size(starSize.dp)
-            )
-        }
-    }
-}
-
-/** "Just now" / "5m ago" / "3h ago" / "2d ago", then a full date. */
-private fun formatReviewDate(rawDate: Any?): String {
-
-    val timestamp = rawDate as? Timestamp ?: return ""
-
-    val elapsedMs = System.currentTimeMillis() - timestamp.toDate().time
-
-    val minutes = elapsedMs / 60_000
-
-    val hours = minutes / 60
-
-    val days = hours / 24
-
-    return when {
-        minutes < 1 -> "Just now"
-        minutes < 60 -> "${minutes}m ago"
-        hours < 24 -> "${hours}h ago"
-        days <= 7 -> "${days}d ago"
-        else -> {
-            val calendar = java.util.Calendar.getInstance()
-            calendar.time = timestamp.toDate()
-            val months = arrayOf(
-                "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-            )
-            "${months[calendar.get(java.util.Calendar.MONTH)]} " +
-                "${calendar.get(java.util.Calendar.DAY_OF_MONTH)}, " +
-                "${calendar.get(java.util.Calendar.YEAR)}"
-        }
-    }
+    )
 }

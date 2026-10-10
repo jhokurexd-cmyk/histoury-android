@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -18,7 +17,6 @@ import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ConfirmationNumber
 import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
@@ -247,7 +245,7 @@ internal fun ItineraryStopPreviewHost(viewModel: ItineraryViewModel) {
 
     val isAlreadyIn = when (target.mode) {
         StopPreviewMode.SELECTION -> preview.refId in uiState.selectedSiteIds
-        StopPreviewMode.RECOMMENDATION -> preview.refId !in uiState.dismissedRecommendationIds
+        StopPreviewMode.RECOMMENDATION -> preview.refId in uiState.selectedRecommendationIds
         else -> uiState.generatedStops.any { it.refId == preview.refId }
     }
 
@@ -754,89 +752,6 @@ private fun SecondaryActionButton(text: String, onClick: () -> Unit) {
             fontSize = 14.5.sp,
             fontWeight = FontWeight.Bold,
             color = TextPrimary
-        )
-    }
-}
-
-// ---------------------------------------------------------------------------
-// The affordance itself
-// ---------------------------------------------------------------------------
-
-/**
- * The small "i" that opens a preview. Sized to a 32dp touch target and
- * given its own click handler so tapping it never toggles the selection of
- * the card it sits on.
- */
-@Composable
-internal fun PreviewInfoButton(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    tint: Color = Primary,
-    background: Color = CardSurface
-) {
-
-    Box(
-        modifier = modifier
-            .size(32.dp)
-            .clip(CircleShape)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-
-        Box(
-            modifier = Modifier
-                .size(24.dp)
-                .clip(CircleShape)
-                .background(background),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Info,
-                contentDescription = "View details",
-                tint = tint,
-                modifier = Modifier.size(15.dp)
-            )
-        }
-    }
-}
-
-/**
- * Text version, for list rows where a floating circle would crowd the
- * layout. Reads as a link rather than a control that changes the trip.
- */
-@Composable
-internal fun PreviewDetailsLink(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(50))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            )
-            .padding(horizontal = 8.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = Icons.Default.Info,
-            contentDescription = null,
-            tint = Primary,
-            modifier = Modifier.size(12.dp)
-        )
-        Spacer(Modifier.width(4.dp))
-        Text(
-            text = "Details",
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            color = Primary
         )
     }
 }

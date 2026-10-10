@@ -1,5 +1,7 @@
 package com.histoury.app.ui.screens.auth
 
+import com.histoury.app.navigation.safePopBackStack
+import com.histoury.app.navigation.navigateSafely
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -22,6 +24,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import com.histoury.app.util.Validators
+import com.histoury.app.util.rememberFormState
+import com.histoury.app.ui.components.FieldErrorText
 import com.histoury.app.data.viewmodel.ForgotPasswordViewModel
 import com.histoury.app.navigation.Routes
 import com.histoury.app.theme.CardSurface
@@ -47,10 +52,13 @@ fun OtpVerificationScreen(
 
     val uiState by forgotPasswordViewModel.uiState.collectAsState()
 
+    val form = rememberFormState()
+    val otpError = Validators.otp(uiState.otpCode)
+
     LaunchedEffect(uiState.otpVerified) {
         if (uiState.otpVerified) {
             forgotPasswordViewModel.otpVerifiedShown()
-            navController.navigate(Routes.ResetPassword.route)
+            navController.navigateSafely(Routes.ResetPassword.route)
         }
     }
 
@@ -59,6 +67,7 @@ fun OtpVerificationScreen(
             .fillMaxSize()
             .background(SurfaceSoft)
             .statusBarsPadding()
+            .imePadding()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 28.dp)
     ) {
@@ -76,7 +85,7 @@ fun OtpVerificationScreen(
                     indication = null,
                     enabled = !uiState.isLoading
                 ) {
-                    navController.popBackStack()
+                    navController.safePopBackStack()
                 },
             contentAlignment = Alignment.Center
         ) {
@@ -132,9 +141,16 @@ fun OtpVerificationScreen(
 
         OtpInputField(
             value = uiState.otpCode,
-            onValueChange = { forgotPasswordViewModel.onOtpCodeChange(it) },
+            onValueChange = {
+                forgotPasswordViewModel.onOtpCodeChange(it)
+                form.touch("otp")
+            },
             enabled = !uiState.isLoading
         )
+
+        // Shown once Verify is pressed — a "6 digits" warning after the
+        // first digit would only nag while the code is still being typed.
+        FieldErrorText(if (form.submitted) otpError else null)
 
         if (uiState.infoMessage != null) {
 
@@ -179,7 +195,9 @@ fun OtpVerificationScreen(
         PrimaryButton(
             text = "Verify Code",
             isLoading = uiState.isLoading,
-            onClick = { forgotPasswordViewModel.verifyOtp() }
+            onClick = {
+                if (form.submit(otpError)) forgotPasswordViewModel.verifyOtp()
+            }
         )
 
         Spacer(Modifier.height(20.dp))
@@ -192,7 +210,7 @@ fun OtpVerificationScreen(
             modifier = Modifier
                 .align(Alignment.CenterHorizontally)
                 .clickable(enabled = !uiState.isLoading) {
-                    navController.popBackStack()
+                    navController.safePopBackStack()
                 }
         )
 

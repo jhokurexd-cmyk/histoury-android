@@ -20,6 +20,14 @@ object FirebaseErrorMessages {
 
     fun friendly(e: Throwable?): String {
 
+        // A disabled account arrives as FirebaseAuthInvalidUserException,
+        // the same type as a wrong password, so the code has to be checked
+        // before the type — otherwise it was reported as "Incorrect email
+        // or password".
+        if (e is FirebaseAuthException && e.errorCode == "ERROR_USER_DISABLED") {
+            return "This account has been disabled. Contact support for help."
+        }
+
         return when (e) {
 
             // Wrong password / malformed credential / bad email format.

@@ -44,6 +44,14 @@ data class HistoricalSite(
     // Firebase Storage download URL of the .glb model.
     val arModelUrl: String = "",
 
+    // Written by the admin panel with each model upload: a version number
+    // (upload time in ms) and the file's size in bytes. Offline Downloads
+    // uses them to show the download size and to tell when a downloaded
+    // model is out of date. 0 on sites saved before these existed.
+    val arModelVersion: Long = 0L,
+
+    val arModelSizeBytes: Long = 0L,
+
     // Real-world length in metres of the model's longest side, as set in the
     // admin panel. Required for geospatial placement (there is no photo to
     // measure against). With image recognition it is optional: when set it

@@ -339,9 +339,6 @@ val Surface: Color
 val CardSurface: Color
     @Composable @ReadOnlyComposable get() = LocalHistouryColors.current.surface
 
-val RaisedSurface: Color
-    @Composable @ReadOnlyComposable get() = LocalHistouryColors.current.surfaceRaised
-
 val SurfaceSoft: Color
     @Composable @ReadOnlyComposable get() = LocalHistouryColors.current.surfaceSoft
 
@@ -410,9 +407,6 @@ val GlassEdge: Color
 
 val GlassShadow: Color
     @Composable @ReadOnlyComposable get() = LocalHistouryColors.current.glassShadow
-
-val ImageScrim: Color
-    @Composable @ReadOnlyComposable get() = LocalHistouryColors.current.imageScrim
 
 /**
  * For the handful of places that need to branch on the theme rather than

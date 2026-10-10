@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.histoury.app.data.repository.AuthRepository
 import com.histoury.app.data.repository.EmailOtpRepository
+import com.histoury.app.util.AsyncCheck
+import com.histoury.app.util.Validators
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,8 +33,27 @@ data class RegisterUiState(
     val errorMessage: String? = null,
     val infoMessage: String? = null,
     val registerSucceeded: Boolean = false,
-    val resendCooldownSeconds: Int = 0
-)
+    val resendCooldownSeconds: Int = 0,
+    /** Debounced "already registered?" check for [email]. */
+    val emailCheck: AsyncCheck = AsyncCheck.IDLE
+) {
+    // Field errors, computed from the current values with the shared rules
+    // (util/FormValidation.kt). The screen decides when each may show; the
+    // same functions are the final check in register().
+    val firstNameError: String? get() = Validators.name(firstName, "First name")
+    val lastNameError: String? get() = Validators.name(lastName, "Last name")
+    val emailError: String?
+        get() = Validators.email(email)
+            ?: if (emailCheck == AsyncCheck.TAKEN) "An account with this email already exists." else null
+    val passwordError: String? get() = Validators.newPassword(password)
+    val confirmPasswordError: String? get() = Validators.confirmPassword(password, confirmPassword)
+    val termsError: String?
+        get() = if (agreedToTerms) null else "Please accept the Terms & Conditions and Privacy Policy."
+    val otpError: String? get() = Validators.otp(otpCode)
+
+    val detailsErrors: List<String?>
+        get() = listOf(firstNameError, lastNameError, emailError, passwordError, confirmPasswordError, termsError)
+}
 
 class RegisterViewModel : ViewModel() {
 
@@ -45,20 +66,50 @@ class RegisterViewModel : ViewModel() {
 
     private var cooldownJob: Job? = null
 
+    private var emailCheckJob: Job? = null
+
     fun onFirstNameChange(value: String) {
-        if (value.all { it.isLetter() }) {
+        if (value.all(Validators::isAllowedNameChar)) {
             _uiState.value = _uiState.value.copy(firstName = value, errorMessage = null)
         }
     }
 
     fun onLastNameChange(value: String) {
-        if (value.all { it.isLetter() }) {
+        if (value.all(Validators::isAllowedNameChar)) {
             _uiState.value = _uiState.value.copy(lastName = value, errorMessage = null)
         }
     }
 
     fun onEmailChange(value: String) {
         _uiState.value = _uiState.value.copy(email = value, errorMessage = null)
+        scheduleEmailCheck(value)
+    }
+
+    /**
+     * Asks the server whether the email is free — 600ms after typing stops,
+     * and only once the format is valid, so it isn't called per keystroke.
+     * A newer keystroke cancels an older check.
+     */
+    private fun scheduleEmailCheck(value: String) {
+        emailCheckJob?.cancel()
+        // The last result was for the previous email; don't let it (e.g. a
+        // stale TAKEN) block this one during the debounce.
+        _uiState.value = _uiState.value.copy(emailCheck = AsyncCheck.IDLE)
+        if (Validators.email(value) != null) return
+        emailCheckJob = viewModelScope.launch {
+            delay(600)
+            _uiState.value = _uiState.value.copy(emailCheck = AsyncCheck.CHECKING)
+            val result = emailOtpRepository.isEmailAvailable(value)
+            if (_uiState.value.email != value) return@launch
+            _uiState.value = _uiState.value.copy(
+                emailCheck = result.fold(
+                    onSuccess = { available -> if (available) AsyncCheck.AVAILABLE else AsyncCheck.TAKEN },
+                    // Unreachable check: say nothing. Sending the code still
+                    // refuses an email that's already registered.
+                    onFailure = { AsyncCheck.FAILED }
+                )
+            )
+        }
     }
 
     fun onPasswordChange(value: String) {
@@ -135,10 +186,8 @@ class RegisterViewModel : ViewModel() {
         // Ignore repeat taps while a request is already running.
         if (currentState.isLoading) return
 
-        if (currentState.otpCode.length != 6) {
-            _uiState.value = currentState.copy(
-                errorMessage = "Enter the 6-digit code from the email."
-            )
+        // Final check (the screen shows the same message under the field).
+        if (currentState.otpError != null) {
             return
         }
 
@@ -150,43 +199,28 @@ class RegisterViewModel : ViewModel() {
                 infoMessage = null
             )
 
-            val verifyResult = emailOtpRepository.verifyOtp(
+            // One call: the server checks the code and creates the account
+            // (login + profile together), then the app signs in.
+            val registerResult = authRepository.register(
+                firstName = currentState.firstName.trim(),
+                lastName = currentState.lastName.trim(),
                 email = currentState.email.trim(),
-                code = currentState.otpCode,
-                purpose = EmailOtpRepository.PURPOSE_REGISTER
+                password = currentState.password,
+                code = currentState.otpCode
             )
 
-            verifyResult.fold(
+            registerResult.fold(
                 onSuccess = {
-
-                    val registerResult = authRepository.register(
-                        firstName = currentState.firstName.trim(),
-                        lastName = currentState.lastName.trim(),
-                        email = currentState.email.trim(),
-                        password = currentState.password
-                    )
-
-                    registerResult.fold(
-                        onSuccess = {
-                            _uiState.value = _uiState.value.copy(
-                                isLoading = false,
-                                registerSucceeded = true
-                            )
-                        },
-                        onFailure = { error ->
-                            _uiState.value = _uiState.value.copy(
-                                isLoading = false,
-                                errorMessage = error.message
-                                    ?: "Registration failed. Please try again."
-                            )
-                        }
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        registerSucceeded = true
                     )
                 },
                 onFailure = { error ->
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         errorMessage = error.message
-                            ?: "Verification failed. Please try again."
+                            ?: "Registration failed. Please try again."
                     )
                 }
             )
@@ -258,32 +292,11 @@ class RegisterViewModel : ViewModel() {
         )
     }
 
-    private fun validate(state: RegisterUiState): String? {
-
-        if (state.firstName.isBlank() || state.lastName.isBlank()) {
-            return "Please enter your first and last name."
-        }
-
-        if (state.firstName.trim().length < 2 || state.lastName.trim().length < 2) {
-            return "First and last name must be at least 2 letters."
-        }
-
-        if (state.email.isBlank() || !state.email.contains("@")) {
-            return "Please enter a valid email address."
-        }
-
-        if (state.password.length < 6) {
-            return "Password must be at least 6 characters."
-        }
-
-        if (state.password != state.confirmPassword) {
-            return "Passwords don't match."
-        }
-
-        if (!state.agreedToTerms) {
-            return "Please accept the Terms & Conditions and Privacy Policy to continue."
-        }
-
-        return null
-    }
+    /**
+     * Final check before sending the code: the same rules the screen shows
+     * live. Returns the first problem, or null. (Typing in a name also
+     * filters out characters Validators.isAllowedNameChar doesn't allow.)
+     */
+    private fun validate(state: RegisterUiState): String? =
+        state.detailsErrors.firstOrNull { it != null }
 }

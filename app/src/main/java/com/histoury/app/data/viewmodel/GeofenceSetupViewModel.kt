@@ -54,12 +54,15 @@ class GeofenceSetupViewModel(application: Application) : AndroidViewModel(applic
 
             try {
 
-                val geofences = geofenceRepository.getAllActiveGeofences()
+                // null = the fetch failed: keep the fences already on the
+                // phone and retry on the next call (throttle not advanced).
+                val geofences = geofenceRepository.getAllActiveGeofencesAtSiteCoordinates()
 
-                geofenceManager.registerGeofences(geofences)
-
-                _isRegistered.value = true
-                lastRegisteredAtMs = System.currentTimeMillis()
+                if (geofences != null) {
+                    geofenceManager.registerGeofences(geofences)
+                    _isRegistered.value = true
+                    lastRegisteredAtMs = System.currentTimeMillis()
+                }
 
             } catch (e: Exception) {
                 // Registration failed (permission revoked mid-flight, Play

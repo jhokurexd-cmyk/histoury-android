@@ -34,7 +34,7 @@ android {
         targetSdk = 36
 
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.0.0"
 
         testInstrumentationRunner =
             "androidx.test.runner.AndroidJUnitRunner"
@@ -94,6 +94,8 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
 
+    implementation("androidx.work:work-runtime-ktx:2.10.1")
+
     implementation("androidx.compose.material:material-icons-extended")
 
     implementation("androidx.compose.foundation:foundation")
@@ -108,9 +110,16 @@ dependencies {
 
     implementation("com.google.firebase:firebase-functions")
 
-    implementation("com.google.maps.android:maps-compose:4.3.3")
+    // Maps SDK 19.x: the current Google base map (same palette and data
+    // layers as the Google Maps app, incl. sidewalks/crosswalks/footpath
+    // detail where Google has it, from zoom ~17) and the native dark color
+    // scheme. 18.2.0 predates both. maps-compose 6.12.2 is the last
+    // release on Maps SDK 19.2.0 (Kotlin 2.2.20, Compose BOM 2025.09):
+    // 7.0 raises the Compose version and 8.0 moves to Maps SDK 20, so this
+    // is the smallest step that brings the current base map.
+    implementation("com.google.maps.android:maps-compose:6.12.2")
 
-    implementation("com.google.android.gms:play-services-maps:18.2.0")
+    implementation("com.google.android.gms:play-services-maps:19.2.0")
 
     implementation("com.google.android.gms:play-services-location:21.2.0")
 

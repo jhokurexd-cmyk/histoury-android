@@ -1,5 +1,12 @@
 package com.histoury.app.ui.screens.menu
 
+import androidx.compose.material.icons.filled.School
+import com.histoury.app.ui.tutorial.TutorialPreference
+import com.histoury.app.ui.tutorial.TutorialStep
+import com.histoury.app.ui.tutorial.TutorialTour
+import com.histoury.app.ui.tutorial.tutorialTarget
+import com.histoury.app.navigation.safePopBackStack
+import com.histoury.app.navigation.navigateSafely
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -11,12 +18,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Shield
@@ -78,7 +85,19 @@ fun MenuScreen(
 
     val themeMode by ThemePreference.mode.collectAsState()
 
+    val favoriteIds by com.histoury.app.data.repository.FavoritesRepository.favoriteIds.collectAsState()
+    val favoriteCount = favoriteIds.size
+
     var showAppearanceSheet by remember { mutableStateOf(false) }
+
+    // Settings > Offline Downloads: "Download over" and automatic updates.
+    var showDownloadSettings by remember { mutableStateOf(false) }
+
+    if (showDownloadSettings) {
+        com.histoury.app.ui.components.DownloadSettingsSheet(
+            onDismiss = { showDownloadSettings = false }
+        )
+    }
 
     if (showAppearanceSheet) {
         AppearanceSheet(
@@ -91,6 +110,34 @@ fun MenuScreen(
         )
     }
     val userState by menuViewModel.uiState.collectAsState()
+
+    // Logging out is one tap away from "Appearance" at the bottom of a long
+    // list — confirm it rather than signing someone out by accident.
+    var showLogoutConfirm by remember { mutableStateOf(false) }
+
+    if (showLogoutConfirm) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showLogoutConfirm = false },
+            title = { Text("Log out?") },
+            text = { Text("You'll need to sign in again to see your itineraries, photos and visit history.") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    showLogoutConfirm = false
+                    menuViewModel.signOut()
+                    navController.navigateSafely(Routes.Login.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }) {
+                    Text("Log Out", color = Danger, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { showLogoutConfirm = false }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            }
+        )
+    }
 
     LaunchedEffect(Unit) {
         menuViewModel.loadUser()
@@ -125,7 +172,7 @@ fun MenuScreen(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) {
-                        navController.popBackStack()
+                        navController.safePopBackStack()
                     }
                     .align(Alignment.CenterStart),
                 contentAlignment = Alignment.Center
@@ -156,7 +203,7 @@ fun MenuScreen(
             ) {
                 Row(
                     modifier = Modifier
-                        .clickable { navController.navigate(Routes.Profile.route) }
+                        .clickable { navController.navigateSafely(Routes.Profile.route) }
                         .padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -193,11 +240,15 @@ fun MenuScreen(
                             fontWeight = FontWeight.Bold,
                             fontSize = 18.sp
                         )
-                        Text(
-                            text = userState.email.ifBlank { "tourist@example.com" },
-                            color = TextSecondary,
-                            fontSize = 14.sp
-                        )
+                        // No placeholder address: showing a made-up email
+                        // for a moment read as someone else's account.
+                        if (userState.email.isNotBlank()) {
+                            Text(
+                                text = userState.email,
+                                color = TextSecondary,
+                                fontSize = 14.sp
+                            )
+                        }
                     }
 
                     Icon(
@@ -212,57 +263,114 @@ fun MenuScreen(
             Spacer(Modifier.height(16.dp))
 
             // --- Menu Sections ---
-            MenuSection(title = "Explore") {
-                MenuItemRow(
-                    icon = Icons.Default.MenuBook,
-                    label = "Site Information",
-                    onClick = { navController.navigate(Routes.SiteLibrary.route) }
+
+            TutorialTour(
+                id = "menu",
+                steps = listOf(
+                    TutorialStep(
+                        target = "menu_library",
+                        title = "Site Information",
+                        body = "Every historical site in one list, with the ones you've unlocked by visiting."
+                    ),
+                    TutorialStep(
+                        target = "menu_favorites",
+                        title = "Favorites",
+                        body = "Sites you saved with the heart button."
+                    ),
+                    TutorialStep(
+                        target = "menu_rankings",
+                        title = "Site Rankings",
+                        body = "The top-rated sites and what other visitors say about them."
+                    ),
+                    TutorialStep(
+                        target = "menu_downloads",
+                        title = "Offline Downloads",
+                        body = "Save AR models and narration to your phone, so they work at the site even without signal."
+                    ),
+                    // Further down the page (possibly off screen), so
+                    // explained without a spotlight.
+                    TutorialStep(
+                        target = null,
+                        title = "Help is further down",
+                        body = "Under Help & Support: the Support Center for questions, and Show App Tutorials Again to replay these tours anytime."
+                    )
                 )
+            )
+            MenuSection(title = "Explore") {
+                Box(Modifier.tutorialTarget("menu_library")) {
+                    MenuItemRow(
+                        icon = Icons.Default.MenuBook,
+                        label = "Site Information",
+                        onClick = { navController.navigateSafely(Routes.SiteLibrary.route) }
+                    )
+                }
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = DividerColor, thickness = 0.5.dp)
+                Box(Modifier.tutorialTarget("menu_favorites")) {
+                    MenuItemRow(
+                        icon = Icons.Default.Favorite,
+                        label = "Favorites",
+                        secondaryText = if (favoriteCount > 0) favoriteCount.toString() else null,
+                        onClick = { navController.navigateSafely(Routes.Favorites.route) }
+                    )
+                }
             }
 
             MenuSection(title = "Account") {
                 MenuItemRow(
                     icon = Icons.Default.Person,
                     label = "View Profile",
-                    onClick = { navController.navigate(Routes.Profile.route) }
+                    onClick = { navController.navigateSafely(Routes.Profile.route) }
                 )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = DividerColor, thickness = 0.5.dp)
-                MenuItemRow(
-                    icon = Icons.Default.EmojiEvents,
-                    label = "Site Rankings",
-                    onClick = { navController.navigate(Routes.Rankings.route) }
-                )
+                Box(Modifier.tutorialTarget("menu_rankings")) {
+                    MenuItemRow(
+                        icon = Icons.Default.EmojiEvents,
+                        label = "Site Rankings",
+                        onClick = { navController.navigateSafely(Routes.Rankings.route) }
+                    )
+                }
             }
 
             MenuSection(title = "Storage") {
-                MenuItemRow(
-                    icon = Icons.Default.Download,
-                    label = "Offline Downloads",
-                    onClick = { navController.navigate(Routes.Downloads.route) }
-                )
+                Box(Modifier.tutorialTarget("menu_downloads")) {
+                    MenuItemRow(
+                        icon = Icons.Default.Download,
+                        label = "Offline Downloads",
+                        onClick = { navController.navigateSafely(Routes.Downloads.route) }
+                    )
+                }
             }
 
-            // TEMPORARY — on-site test tool for checking whether ARCore's
-            // Streetscape Geometry can see building shapes at Fort
-            // Santiago and Baluarte de San Diego. Remove this section (and
-            // Routes.StreetscapeDebug / its NavGraph entry / the
-            // StreetscapeDebugScreen.kt file) once on-site testing is done
-            // and a decision has been made about Streetscape Geometry.
-            MenuSection(title = "Developer (Temporary)") {
-                MenuItemRow(
-                    icon = Icons.Default.BugReport,
-                    label = "Site AR Test",
-                    secondaryText = "Streetscape check",
-                    onClick = { navController.navigate(Routes.StreetscapeDebug.route) }
-                )
-            }
+            // The on-site "Site AR Test" (Streetscape Geometry check) is no
+            // longer listed here: it showed in every debuggable build, which
+            // is what testers and visitors were installing. The tool itself
+            // (StreetscapeDebugScreen, Routes.StreetscapeDebug) is kept for
+            // internal use; to reach it during development, temporarily add
+            // a MenuItemRow here that navigates to Routes.StreetscapeDebug.
 
             MenuSection(title = "Help & Support") {
-                MenuItemRow(
-                    icon = Icons.Default.ChatBubbleOutline,
-                    label = "Support Center",
-                    onClick = { navController.navigate(Routes.Support.route) }
-                )
+                Box(Modifier.tutorialTarget("menu_support")) {
+                    MenuItemRow(
+                        icon = Icons.Default.ChatBubbleOutline,
+                        label = "Support Center",
+                        onClick = { navController.navigateSafely(Routes.Support.route) }
+                    )
+                }
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = DividerColor, thickness = 0.5.dp)
+                Box(Modifier.tutorialTarget("menu_tutorials")) {
+                    MenuItemRow(
+                        icon = Icons.Default.School,
+                        label = "Show App Tutorials Again",
+                        onClick = {
+                            TutorialPreference.resetAll(context)
+                            android.widget.Toast.makeText(
+                                context,
+                                "Tutorials will show again as you open each screen.",
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    )
+                }
             }
 
             MenuSection(title = "Legal") {
@@ -270,7 +378,7 @@ fun MenuScreen(
                     icon = Icons.Default.Shield,
                     label = "Privacy Policy",
                     onClick = {
-                        navController.navigate(Routes.Legal.createRoute(LegalContent.TYPE_PRIVACY))
+                        navController.navigateSafely(Routes.Legal.createRoute(LegalContent.TYPE_PRIVACY))
                     }
                 )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = DividerColor, thickness = 0.5.dp)
@@ -278,7 +386,7 @@ fun MenuScreen(
                     icon = Icons.Default.Description,
                     label = "Terms & Conditions",
                     onClick = {
-                        navController.navigate(Routes.Legal.createRoute(LegalContent.TYPE_TERMS))
+                        navController.navigateSafely(Routes.Legal.createRoute(LegalContent.TYPE_TERMS))
                     }
                 )
             }
@@ -300,17 +408,23 @@ fun MenuScreen(
                     thickness = 0.5.dp
                 )
                 MenuItemRow(
+                    icon = Icons.Default.Download,
+                    label = "Offline Downloads",
+                    secondaryText = com.histoury.app.ui.components.downloadSettingsSummary(),
+                    onClick = { showDownloadSettings = true }
+                )
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    color = DividerColor,
+                    thickness = 0.5.dp
+                )
+                MenuItemRow(
                     icon = Icons.Default.Logout,
                     label = "Logout",
                     labelColor = Danger,
                     iconTint = Danger,
                     showChevron = false,
-                    onClick = {
-                        menuViewModel.signOut()
-                        navController.navigate(Routes.Login.route) {
-                            popUpTo(0) { inclusive = true }
-                        }
-                    }
+                    onClick = { showLogoutConfirm = true }
                 )
             }
 

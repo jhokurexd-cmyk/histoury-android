@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
+import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -43,6 +44,23 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 "Geofence error: $errorMessage"
             )
 
+            // Play Services drops every fence when location is switched off.
+            // Try to put them back now; if location is still off this fails
+            // and Home re-registers them the next time it's opened.
+            if (geofencingEvent.errorCode == GeofenceStatusCodes.GEOFENCE_NOT_AVAILABLE) {
+                val resync = goAsync()
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        GeofenceSync.resyncOrScheduleRetry(context)
+                    } catch (e: Exception) {
+                        Log.w("GeofenceReceiver", "Couldn't re-register geofences", e)
+                    } finally {
+                        resync.finish()
+                    }
+                }
+            }
+
+
             return
         }
 
@@ -56,6 +74,23 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         val triggeringGeofences =
             geofencingEvent.triggeringGeofences ?: return
 
+        // Signed out (logged out, suspended, account removed): fences left
+        // registered by that session must not notify anyone. Remove them
+        // and stop here.
+        if (com.google.firebase.auth.FirebaseAuth.getInstance().currentUser == null) {
+            val cleanup = goAsync()
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    GeofenceManager(context.applicationContext).removeAllGeofences()
+                } catch (e: Exception) {
+                    Log.w("GeofenceReceiver", "Couldn't remove geofences after sign-out", e)
+                } finally {
+                    cleanup.finish()
+                }
+            }
+            return
+        }
+
         val pendingResult = goAsync()
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -63,38 +98,35 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             try {
 
                 val repository = VisitHistoryRepository()
-
                 triggeringGeofences.forEach { geofence ->
 
-                    repository.recordVisitIfNotRecent(
-                        geofence.requestId
-                    )
+                    val siteId = geofence.requestId
+                    val isNewArrival = try {
+                        repository.recordVisitIfNotRecent(siteId)
+                    } catch (e: Exception) {
+                        Log.e(
+                            "GeofenceReceiver",
+                            "Failed to record visit",
+                            e
+                        )
+                        false
+                    }
+
+                    if (isNewArrival) {
+
+                        showArrivalNotification(
+                            context = context,
+                            siteId = siteId
+                        )
+
+                        ArrivalEventBus.emit(siteId)
+                    }
                 }
-
-            } catch (e: Exception) {
-
-                Log.e(
-                    "GeofenceReceiver",
-                    "Failed to record visit",
-                    e
-                )
 
             } finally {
 
                 pendingResult.finish()
             }
-        }
-
-        triggeringGeofences.forEach { geofence ->
-
-            val siteId = geofence.requestId
-
-            showArrivalNotification(
-                context = context,
-                siteId = siteId
-            )
-
-            ArrivalEventBus.emit(siteId)
         }
     }
 
@@ -105,9 +137,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
         createNotificationChannel(context)
 
-        val soundUri =
-            "android.resource://${context.packageName}/${R.raw.arrival_chime}"
-                .toUri()
+        val soundUri = arrivalSoundUri(context)
 
         val contentIntent =
             Intent(
@@ -156,11 +186,15 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 .setContentIntent(contentPendingIntent)
                 .build()
 
+        // POST_NOTIFICATIONS only exists on Android 13+. Below that,
+        // checkSelfPermission() reports it as DENIED, which silenced every
+        // arrival notification on Android 8-12.
         val hasPermission =
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
 
         if (hasPermission) {
 
@@ -177,9 +211,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         context: Context
     ) {
 
-        val soundUri =
-            "android.resource://${context.packageName}/${R.raw.arrival_chime}"
-                .toUri()
+        val soundUri = arrivalSoundUri(context)
 
         val audioAttributes =
             AudioAttributes.Builder()
@@ -214,14 +246,30 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 NotificationManager::class.java
             )
 
+        // The v2 channel saved its sound by numeric resource ID, which can
+        // change between builds. Channel sounds can't be edited after
+        // creation, so it's replaced by v3 rather than updated.
+        notificationManager.deleteNotificationChannel(
+            LEGACY_CHANNEL_ID
+        )
+
         notificationManager.createNotificationChannel(
             channel
         )
     }
 
+    // By resource name, not R.raw's numeric ID: the system stores this URI
+    // with the channel, and numeric IDs aren't stable across app updates.
+    private fun arrivalSoundUri(context: Context) =
+        "android.resource://${context.packageName}/raw/arrival_chime"
+            .toUri()
+
     companion object {
 
         private const val CHANNEL_ID =
+            "site_arrivals_custom_sound_v3"
+
+        private const val LEGACY_CHANNEL_ID =
             "site_arrivals_custom_sound_v2"
     }
 }

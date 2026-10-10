@@ -1,5 +1,6 @@
 package com.histoury.app.data.viewmodel
 
+import com.histoury.app.util.Validators
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.histoury.app.data.repository.EmailOtpRepository
@@ -67,8 +68,8 @@ class ForgotPasswordViewModel : ViewModel() {
 
         if (currentState.isLoading) return
 
-        if (currentState.email.isBlank() || !currentState.email.contains("@")) {
-            _uiState.value = currentState.copy(errorMessage = "Please enter a valid email address.")
+        if (Validators.email(currentState.email) != null) {
+            _uiState.value = currentState.copy(errorMessage = Validators.email(currentState.email))
             return
         }
 
@@ -119,8 +120,8 @@ class ForgotPasswordViewModel : ViewModel() {
 
         if (currentState.isLoading) return
 
-        if (currentState.otpCode.length != 6) {
-            _uiState.value = currentState.copy(errorMessage = "Enter the 6-digit code from the email.")
+        if (Validators.otp(currentState.otpCode) != null) {
+            _uiState.value = currentState.copy(errorMessage = Validators.otp(currentState.otpCode))
             return
         }
 
@@ -255,20 +256,9 @@ class ForgotPasswordViewModel : ViewModel() {
         }
     }
 
-    private fun validate(state: ForgotPasswordUiState): String? {
-
-        if (state.otpCode.length != 6) {
-            return "Enter the 6-digit code from the email."
-        }
-
-        if (state.newPassword.length < 6) {
-            return "Password must be at least 6 characters."
-        }
-
-        if (state.newPassword != state.confirmPassword) {
-            return "Passwords don't match."
-        }
-
-        return null
-    }
+    /** Final check — the same shared rules the screens show live. */
+    private fun validate(state: ForgotPasswordUiState): String? =
+        Validators.otp(state.otpCode)
+            ?: Validators.newPassword(state.newPassword)
+            ?: Validators.confirmPassword(state.newPassword, state.confirmPassword)
 }

@@ -24,7 +24,15 @@ data class RouteLeg(
 
     val durationSeconds: Int,
 
-    val isStraightLineFallback: Boolean
+    val isStraightLineFallback: Boolean,
+
+    /** Credit line this leg's route needs on screen (OpenStreetMap-based routes); null for Google. */
+    val attribution: String? = null,
+
+    /** True when the leg ends at a verified visitor entrance rather than the site's centre point. */
+    val endsAtVerifiedEntrance: Boolean = false,
+
+    val warnings: List<String> = emptyList()
 ) {
 
     val durationMinutes: Int
@@ -63,9 +71,17 @@ data class RoutePath(
     val totalDurationMinutes: Int
         get() = Math.max(1, Math.round(totalDurationSeconds / 60.0).toInt())
 
-    /** True if any leg fell back to a straight line — totals are then approximate. */
+    /** True if any leg couldn't be routed — totals are then approximate. */
     val hasApproximateLegs: Boolean
         get() = legs.any { it.isStraightLineFallback }
+
+    /** How many legs have no real route (only an estimate, and no line on the map). */
+    val unroutedLegCount: Int
+        get() = legs.count { it.isStraightLineFallback }
+
+    /** Every distinct credit line the drawn legs require, to show under the map. */
+    val attributions: List<String>
+        get() = legs.filter { !it.isStraightLineFallback }.mapNotNull { it.attribution }.distinct()
 
     val isEmpty: Boolean
         get() = legs.isEmpty()

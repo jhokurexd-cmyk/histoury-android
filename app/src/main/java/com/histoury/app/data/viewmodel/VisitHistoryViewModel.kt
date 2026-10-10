@@ -6,10 +6,15 @@ import com.google.firebase.Timestamp
 import com.histoury.app.data.model.HistoricalSite
 import com.histoury.app.data.model.VisitHistory
 import com.histoury.app.data.repository.HistoricalSiteRepository
+import com.histoury.app.data.repository.AuthRepository
+import com.histoury.app.data.repository.VisitHistoryEvents
 import com.histoury.app.data.repository.VisitHistoryRepository
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
 data class VisitedSiteEntry(
@@ -20,7 +25,9 @@ data class VisitedSiteEntry(
 data class VisitHistoryUiState(
     val isLoading: Boolean = false,
     val visitedEntries: List<VisitedSiteEntry> = emptyList(),
-    val yetToExploreSites: List<HistoricalSite> = emptyList()
+    val yetToExploreSites: List<HistoricalSite> = emptyList(),
+    /** Set when a refresh failed; the list keeps what it last showed. */
+    val refreshFailed: Boolean = false
 )
 
 class VisitHistoryViewModel : ViewModel() {
@@ -32,42 +39,98 @@ class VisitHistoryViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(VisitHistoryUiState())
     val uiState: StateFlow<VisitHistoryUiState> = _uiState.asStateFlow()
 
+    private var loadJob: Job? = null
+
+    /** The account the list on screen belongs to. */
+    private var loadedForUid: String? = null
+
+    init {
+        // Load for whoever Firebase Auth says is signed in — including the
+        // moment a saved session finishes restoring after an update or
+        // restart — and start over if the account changes.
+        viewModelScope.launch {
+            AuthRepository().authStateUidFlow()
+                .distinctUntilChanged()
+                .collect { uid ->
+                    if (uid != loadedForUid) {
+                        // Drop a load still running for the previous account.
+                        loadJob?.cancel()
+                        loadedForUid = uid
+                        _uiState.value = VisitHistoryUiState()
+                    }
+                    if (uid != null) loadVisitHistory()
+                }
+        }
+
+        // A visit recorded anywhere in the app (arrival, geofence, AR)
+        // refreshes the list.
+        viewModelScope.launch {
+            VisitHistoryEvents.changes.collect { loadVisitHistory() }
+        }
+    }
+
     fun loadVisitHistory() {
 
-        viewModelScope.launch {
+        // One load at a time; a newer request replaces an older one.
+        loadJob?.cancel()
 
-            _uiState.value = _uiState.value.copy(isLoading = true)
+        loadJob = viewModelScope.launch {
 
-            val visits = visitHistoryRepository.getVisitHistoryForCurrentUser()
+            // Spinner only on the first load; later refreshes happen in place
+            // instead of blanking the list.
+            val hasContent = _uiState.value.visitedEntries.isNotEmpty() ||
+                _uiState.value.yetToExploreSites.isNotEmpty()
+            if (!hasContent) {
+                _uiState.value = _uiState.value.copy(isLoading = true)
+            }
 
-            val allSites = historicalSiteRepository.getHistoricalSites()
+            val visitsDeferred = async { visitHistoryRepository.loadVisitHistory() }
+            val sitesDeferred = async { historicalSiteRepository.getHistoricalSites() }
 
-            val sitesBySlug = allSites.associateBy { site -> site.siteId }
+            val visitsResult = visitsDeferred.await()
+            val allSites = sitesDeferred.await()
+
+            // Couldn't read the visits, or the sites to show them against:
+            // keep what's on screen instead of replacing it with "nothing
+            // visited yet".
+            val visits = visitsResult.getOrNull()
+            // (Sites missing while there ARE visits is a failed read too —
+            // there's always at least one site to show a visit against.)
+            if (visits == null || (allSites.isEmpty() && (hasContent || visits.isNotEmpty()))) {
+                _uiState.value = _uiState.value.copy(isLoading = false, refreshFailed = true)
+                return@launch
+            }
+
+            // A visit's siteId is the site's slug on most records and its
+            // document id on sites saved without one; match either.
+            val sitesByKey = HashMap<String, HistoricalSite>()
+            allSites.forEach { site ->
+                if (site.documentId.isNotBlank()) sitesByKey[site.documentId] = site
+                if (site.siteId.isNotBlank()) sitesByKey[site.siteId] = site
+            }
 
             // Most recent visit per site only, so revisiting the same place
             // doesn't show duplicate "Your Journey" rows.
             val latestVisitPerSite = visits
-                .groupBy { visit -> visit.siteId }
-                .mapValues { (_, visitsForSite) ->
-                    visitsForSite.maxByOrNull { visit ->
+                .mapNotNull { visit -> sitesByKey[visit.siteId]?.let { site -> site to visit } }
+                .groupBy({ it.first.documentId }, { it })
+                .mapValues { (_, pairs) ->
+                    pairs.maxByOrNull { (_, visit) ->
                         (visit.visitDate as? Timestamp)?.toDate()?.time ?: 0L
                     }
                 }
 
             val visitedEntries = latestVisitPerSite.values
                 .filterNotNull()
-                .mapNotNull { visit ->
-                    val site = sitesBySlug[visit.siteId] ?: return@mapNotNull null
-                    VisitedSiteEntry(visit = visit, site = site)
-                }
+                .map { (site, visit) -> VisitedSiteEntry(visit = visit, site = site) }
                 .sortedByDescending { entry ->
                     (entry.visit.visitDate as? Timestamp)?.toDate()?.time ?: 0L
                 }
 
-            val visitedSiteIds = latestVisitPerSite.keys
+            val visitedDocIds = latestVisitPerSite.keys
 
             val yetToExploreSites = allSites.filter { site ->
-                site.siteId !in visitedSiteIds
+                site.documentId !in visitedDocIds
             }
 
             _uiState.value = VisitHistoryUiState(

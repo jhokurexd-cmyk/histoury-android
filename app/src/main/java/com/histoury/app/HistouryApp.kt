@@ -30,6 +30,10 @@ class HistouryApp : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         configureFirestoreCache()
+        // "Location is off" in the notification shade, for as long as it is.
+        com.histoury.app.location.LocationStatusNotifier.start(this)
+        // Favorites tapped with no signal are kept and sent once back online.
+        com.histoury.app.data.repository.FavoritesRepository.init(this)
     }
 
     /**

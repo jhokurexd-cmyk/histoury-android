@@ -49,6 +49,9 @@ class MapOverviewViewModel(application: Application) : AndroidViewModel(applicat
 
     private val _allSites = MutableStateFlow<List<HistoricalSite>>(emptyList())
 
+    /** Every published site, for the pins on the Map tab. */
+    val sites: StateFlow<List<HistoricalSite>> = _allSites.asStateFlow()
+
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
@@ -60,6 +63,16 @@ class MapOverviewViewModel(application: Application) : AndroidViewModel(applicat
 
     private val _cameraTarget = MutableStateFlow<CameraTarget?>(null)
     val cameraTarget: StateFlow<CameraTarget?> = _cameraTarget.asStateFlow()
+
+    private val _selectedSite = MutableStateFlow<HistoricalSite?>(null)
+
+    /** The site whose card is showing after its pin was tapped. */
+    val selectedSite: StateFlow<HistoricalSite?> = _selectedSite.asStateFlow()
+
+    private val _visitedSiteIds = MutableStateFlow<Set<String>>(emptySet())
+
+    /** Sites visited in person — their Site Information is unlocked (same rule as the Site Library). */
+    val visitedSiteIds: StateFlow<Set<String>> = _visitedSiteIds.asStateFlow()
 
     private var geocodeJob: Job? = null
 
@@ -74,6 +87,20 @@ class MapOverviewViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch {
             _allSites.value = historicalSiteRepository.getHistoricalSites()
         }
+    }
+
+    /** Re-read on every visit to the tab: a visit may have just unlocked a site. */
+    fun refreshVisitedSites() {
+        viewModelScope.launch {
+            _visitedSiteIds.value = com.histoury.app.data.repository.VisitHistoryRepository()
+                .getVisitHistoryForCurrentUser()
+                .map { it.siteId }
+                .toSet()
+        }
+    }
+
+    fun selectSite(site: HistoricalSite?) {
+        _selectedSite.value = site
     }
 
     fun onSearchQueryChange(query: String) {

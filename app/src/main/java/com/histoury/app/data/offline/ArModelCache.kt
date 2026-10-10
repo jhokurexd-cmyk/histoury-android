@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.histoury.app.data.model.HistoricalSite
 import com.histoury.app.data.model.isArReady
+import com.histoury.app.util.ConnectivityObserver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -45,9 +46,20 @@ object ArModelCache {
 
     private val inFlight = mutableMapOf<String, Deferred<File>>()
 
-    /** Starts downloading [site]'s model in the background, if it has AR. */
+    /**
+     * Starts downloading [site]'s model in the background, if it has AR.
+     *
+     * Skipped when the site is already in Offline Downloads (its model is on
+     * the phone; newer versions come through the update setting instead),
+     * and when "Download over" is Wi-Fi only and the phone is on mobile data
+     * — merely looking at a site shouldn't spend tens of megabytes of a
+     * visitor's data. Opening AR itself still downloads what it needs.
+     */
     fun prefetch(context: Context, site: HistoricalSite?) {
         if (site == null || !site.isArReady) return
+        if (OfflineSiteManager.isDownloaded(context, site.siteId)) return
+        val onMobile = ConnectivityObserver.currentKind(context) != ConnectivityObserver.NetworkKind.WIFI
+        if (onMobile && DownloadPreferences.downloadOver(context) == DownloadNetwork.WIFI_ONLY) return
         prefetch(context, site.arModelUrl)
     }
 
@@ -56,13 +68,34 @@ object ArModelCache {
         if (url.isBlank()) return
         val appContext = context.applicationContext
         scope.async {
-            runCatching { get(appContext, url) }
+            runCatching { getByUrl(appContext, url) }
                 .onFailure { Log.w("HistouryAR", "Background model download failed", it) }
         }
     }
 
+    /**
+     * The model to open in AR, local copy first:
+     *
+     *  1. the current model already on the phone -> returned immediately
+     *  2. the site is in Offline Downloads       -> its downloaded model,
+     *     even if a newer version exists (the update is fetched separately,
+     *     per "Automatic resource updates"), so AR opens with no connection
+     *  3. otherwise                              -> downloaded from Firebase
+     *     Storage now (or joins a download already running)
+     */
+    suspend fun get(context: Context, url: String, siteId: String? = null): File {
+
+        val cachedFile = fileFor(context, url)
+        if (withContext(Dispatchers.IO) { OfflineStore.isValidGlb(cachedFile) }) return cachedFile
+
+        val downloaded = withContext(Dispatchers.IO) { OfflineSiteManager.localModelFor(context, siteId) }
+        if (downloaded != null) return downloaded
+
+        return getByUrl(context, url)
+    }
+
     /** The model file on the phone, downloading it (or joining a download) if needed. */
-    suspend fun get(context: Context, url: String): File {
+    private suspend fun getByUrl(context: Context, url: String): File {
 
         val cachedFile = fileFor(context, url)
         if (isValidGlb(cachedFile)) return cachedFile
@@ -137,17 +170,6 @@ object ArModelCache {
         }
     }
 
-    private fun isValidGlb(file: File): Boolean {
-        if (!file.isFile || file.length() < 12L || file.length() > 250L * 1024L * 1024L) {
-            return false
-        }
-
-        return runCatching {
-            file.inputStream().buffered().use { input ->
-                val header = ByteArray(4)
-                input.read(header) == 4 &&
-                    header.contentEquals(byteArrayOf(0x67, 0x6C, 0x54, 0x46)) // "glTF"
-            }
-        }.getOrDefault(false)
-    }
+    /** Whole-file check (header and declared length), shared with Offline Downloads. */
+    private fun isValidGlb(file: File): Boolean = OfflineStore.isValidGlb(file)
 }

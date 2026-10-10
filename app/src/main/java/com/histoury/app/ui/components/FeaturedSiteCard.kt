@@ -4,14 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -29,8 +23,6 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.histoury.app.theme.CardSurface
 import com.histoury.app.theme.Primary
-import com.histoury.app.theme.RatingStar
-import com.histoury.app.theme.TextPrimary
 
 /**
  * Home's "Recommended For You" card — just the photo, the name, and a
@@ -43,7 +35,10 @@ fun FeaturedSiteCard(
     title: String,
     rating: Double,
     imageUrl: String,
-    onViewClick: () -> Unit = {}
+    onViewClick: () -> Unit = {},
+    siteDocumentId: String = "",
+    // "1.2 km" from the visitor, or null when their location isn't known.
+    distanceText: String? = null
 ) {
 
     val interactionSource = remember { MutableInteractionSource() }
@@ -89,60 +84,55 @@ fun FeaturedSiteCard(
                 )
         )
 
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(12.dp),
-            shape = RoundedCornerShape(50),
-            color = CardSurface
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Star,
-                    contentDescription = null,
-                    tint = RatingStar,
-                    modifier = Modifier.size(13.dp)
-                )
-                Spacer(Modifier.width(3.dp))
-                Text(
-                    text = "%.1f".format(rating),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    color = TextPrimary
-                )
-            }
-        }
-
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(14.dp)
-                .size(34.dp)
-                .clip(CircleShape)
-                .background(Primary),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                contentDescription = "View site",
-                tint = Color.White,
-                modifier = Modifier.size(16.dp)
+        // Rating top-left, heart top-right, both on the same inset line
+        // and the same height; name and arrow share the bottom row.
+        // No badge until a site has been rated — "0.0" reads as a bad score.
+        if (rating > 0.0) {
+            RatingBadge(
+                rating = rating,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(OverlayControls.CardInset)
             )
         }
 
-        Text(
-            text = title,
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+        SiteFavoriteButton(
+            siteDocumentId = siteDocumentId,
+            siteName = title,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(OverlayControls.CardFavoritePadding)
+        )
+
+        Row(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 16.dp, end = 60.dp, bottom = 18.dp)
-        )
+                .fillMaxWidth()
+                .padding(
+                    start = 16.dp,
+                    end = OverlayControls.CardInset,
+                    bottom = OverlayControls.CardInset
+                ),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (distanceText != null) {
+                    CardDistanceLine(distanceText)
+                }
+            }
+
+            Spacer(Modifier.width(OverlayControls.ControlGap))
+
+            CardArrowBadge()
+        }
     }
 }

@@ -1,5 +1,6 @@
 package com.histoury.app.ui.screens.legal
 
+import com.histoury.app.navigation.safePopBackStack
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -85,7 +86,7 @@ fun LegalScreen(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
                         ) {
-                            navController.popBackStack()
+                            navController.safePopBackStack()
                         },
                     contentAlignment = Alignment.Center
                 ) {

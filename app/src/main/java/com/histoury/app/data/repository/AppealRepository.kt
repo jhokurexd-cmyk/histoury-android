@@ -8,23 +8,24 @@ import kotlinx.coroutines.tasks.await
  * Client for the submitSuspensionAppeal Cloud Function.
  *
  * Called with no Firebase Auth session — the app signs a suspended user
- * out immediately upon detecting the suspension, so this intentionally
- * doesn't rely on request.auth. The Cloud Function re-verifies the given
- * uid is genuinely suspended (via the Admin SDK) before accepting it.
+ * out immediately upon detecting the suspension. Instead it sends the ID
+ * token captured just before that sign-out (AccountStatus.Suspended
+ * .appealToken); the Cloud Function verifies it, so nobody can file an
+ * appeal in someone else's name, then re-checks the suspension itself.
  */
 class AppealRepository {
 
     // Same region as the other custom Cloud Functions (sendEmailOtp, etc.)
     private val functions = FirebaseFunctions.getInstance("asia-southeast1")
 
-    suspend fun submitAppeal(uid: String, message: String): Result<Unit> {
+    suspend fun submitAppeal(appealToken: String, message: String): Result<Unit> {
 
         return try {
 
             functions.getHttpsCallable("submitSuspensionAppeal")
                 .call(
                     hashMapOf(
-                        "uid" to uid,
+                        "idToken" to appealToken,
                         "message" to message.trim()
                     )
                 )

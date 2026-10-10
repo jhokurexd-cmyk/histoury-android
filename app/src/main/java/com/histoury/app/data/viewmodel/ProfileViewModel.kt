@@ -8,9 +8,11 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.histoury.app.data.repository.EmailOtpRepository
 import com.histoury.app.data.repository.ProfileUpdateResult
 import com.histoury.app.data.repository.UserProfileRepository
+import com.histoury.app.util.Validators
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
@@ -120,11 +122,16 @@ class ProfileViewModel : ViewModel() {
                 memberSince = formatMemberSince(creationMillis)
             }
 
-            val visitedCount = countDocuments("visit_history", uid)
+            // Run together rather than one after another.
+            val visitedDeferred = async { countDistinctSitesVisited(uid) }
+            val photosDeferred = async { countDocuments("gallery", uid) }
+            val reviewsDeferred = async { countDocuments("reviews", uid) }
 
-            val photosCount = countDocuments("gallery", uid)
+            val visitedCount = visitedDeferred.await()
 
-            val reviewsCount = countDocuments("reviews", uid)
+            val photosCount = photosDeferred.await()
+
+            val reviewsCount = reviewsDeferred.await()
 
             _uiState.value = _uiState.value.copy(
                 isLoading = false,
@@ -136,6 +143,27 @@ class ProfileViewModel : ViewModel() {
                 reviewsCount = reviewsCount,
                 isSignedIn = true
             )
+        }
+    }
+
+    /**
+     * The "Sites" stat is how many different sites the visitor has been to.
+     * It used to count visit records, so going back to Fort Santiago three
+     * times showed "3 Sites" — and disagreed with Visit History and the Site
+     * Library, which both count each site once.
+     */
+    private suspend fun countDistinctSitesVisited(uid: String): Int {
+        return try {
+            db.collection("visit_history")
+                .whereEqualTo("userId", uid)
+                .get()
+                .await()
+                .documents
+                .mapNotNull { it.getString("siteId") }
+                .toSet()
+                .size
+        } catch (e: Exception) {
+            0
         }
     }
 
@@ -193,10 +221,10 @@ class ProfileViewModel : ViewModel() {
 
     fun updateDisplayName(firstName: String, lastName: String) {
 
-        if (firstName.isBlank() || lastName.isBlank()) {
-            _uiState.value = _uiState.value.copy(
-                updateErrorMessage = "Please enter both first and last name."
-            )
+        // Final check with the shared rules the dialog shows live.
+        val nameError = Validators.name(firstName, "First name") ?: Validators.name(lastName, "Last name")
+        if (nameError != null) {
+            _uiState.value = _uiState.value.copy(updateErrorMessage = nameError)
             return
         }
 
@@ -241,10 +269,10 @@ class ProfileViewModel : ViewModel() {
         val validationError = when {
             currentPassword.isBlank() ->
                 "Please enter your current password."
-            newPassword.length < 6 ->
-                "New password must be at least 6 characters."
-            newPassword != confirmPassword ->
-                "New passwords don't match."
+            Validators.newPassword(newPassword) != null ->
+                Validators.newPassword(newPassword)
+            Validators.confirmPassword(newPassword, confirmPassword) != null ->
+                Validators.confirmPassword(newPassword, confirmPassword)
             newPassword == currentPassword ->
                 "New password must be different from your current one."
             else -> null
@@ -292,9 +320,9 @@ class ProfileViewModel : ViewModel() {
 
         val trimmed = newEmail.trim()
 
-        if (trimmed.isBlank() || !trimmed.contains("@")) {
+        if (Validators.email(trimmed) != null) {
             _uiState.value = _uiState.value.copy(
-                updateErrorMessage = "Please enter a valid email address."
+                updateErrorMessage = Validators.email(trimmed)
             )
             return
         }
@@ -389,7 +417,7 @@ class ProfileViewModel : ViewModel() {
 
         val trimmedCode = code.trim()
 
-        if (trimmedCode.length != 6 || trimmedCode.any { !it.isDigit() }) {
+        if (Validators.otp(trimmedCode) != null) {
             _uiState.value = _uiState.value.copy(
                 updateErrorMessage = "Enter the 6-digit code from the email."
             )
@@ -448,6 +476,10 @@ class ProfileViewModel : ViewModel() {
     }
 
     fun uploadProfilePhoto(uri: Uri) {
+
+        // Picking a second photo while the first is still uploading raced
+        // two uploads to the same file and profile field.
+        if (_uiState.value.isUploadingPhoto) return
 
         viewModelScope.launch {
 

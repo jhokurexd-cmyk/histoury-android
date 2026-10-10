@@ -18,6 +18,12 @@ data class Review(
 
     val likes: Int = 0,
 
+    /** Reports received (maintained by the reportReview Cloud Function). */
+    val reportCount: Int = 0,
+
+    /** "visit", "ar_prompt" or "site_details" — where it was written. */
+    val source: String = "",
+
     val status: String = "",
 
     val visitId: String = "",

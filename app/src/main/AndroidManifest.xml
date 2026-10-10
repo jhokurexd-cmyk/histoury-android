@@ -11,11 +11,33 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- Keeps turn-by-turn navigation running (with an ongoing notification)
+         while the visitor uses another app. See NavigationForegroundService. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+
+    <!--
+        Only for "Save to Device" in the Gallery, and only on Android 9 and
+        below. From Android 10 the media store places the file itself and an
+        app needs nothing granted to add its own media, so maxSdkVersion
+        stops this being requested on versions where it does nothing — and on
+        Android 13+ it is not a permission the system recognises at all.
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
     <!-- AR is a feature of the app, not a requirement to install it. Marked
          optional so phones without ARCore support can still use maps,
          itineraries and site content; the AR button is hidden for them. -->
     <uses-feature
         android:name="android.hardware.camera.ar"
+        android:required="false" />
+
+    <!-- The CAMERA permission otherwise implies a required camera, which
+         would hide the app from camera-less devices on Google Play. -->
+    <uses-feature
+        android:name="android.hardware.camera"
         android:required="false" />
 
     <application
@@ -50,6 +72,8 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
+            android:supportsPictureInPicture="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
             android:label="@string/app_name"
             android:theme="@style/Theme.Histoury">
             <intent-filter>
@@ -62,6 +86,12 @@
         <receiver
             android:name=".location.GeofenceBroadcastReceiver"
             android:exported="false" />
+
+        <service
+            android:name=".location.NavigationForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="location"
+            android:stopWithTask="true" />
 
         <receiver
             android:name=".location.BootReceiver"

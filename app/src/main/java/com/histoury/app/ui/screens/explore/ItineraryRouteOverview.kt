@@ -2,6 +2,10 @@
 
 package com.histoury.app.ui.screens.explore
 
+import com.histoury.app.ui.tutorial.TutorialStep
+import com.histoury.app.ui.tutorial.TutorialTour
+import com.histoury.app.ui.tutorial.tutorialTarget
+import com.histoury.app.navigation.navigateSafely
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -32,6 +36,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Straighten
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.TwoWheeler
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,7 +52,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.Animatable
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.spring
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,6 +85,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.launch
 import coil.compose.AsyncImage
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.BitmapDescriptor
@@ -89,8 +106,15 @@ import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.Polyline
 import com.google.maps.android.compose.rememberCameraPositionState
+import com.histoury.app.ui.components.CharacterCounter
+import com.histoury.app.ui.components.FieldErrorText
+import com.histoury.app.util.Validators
+import com.histoury.app.ui.components.rememberThemedMapColorScheme
 import com.histoury.app.ui.components.rememberThemedMapProperties
 import com.histoury.app.data.itinerary.ItineraryPlanner
+import com.histoury.app.data.model.ItineraryStatus
+import com.histoury.app.data.model.ItineraryStop
+import com.histoury.app.data.model.StopStatus
 import com.histoury.app.data.repository.TravelMode
 import com.histoury.app.data.viewmodel.ItineraryUiState
 import com.histoury.app.data.viewmodel.ItineraryViewModel
@@ -125,9 +149,38 @@ fun ItineraryRouteOverviewScreen(
     var showRenameDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showStartTimePicker by remember { mutableStateOf(false) }
-    var expandedStopId by remember { mutableStateOf<String?>(null) }
 
     val isEditingExisting = uiState.editingItineraryId != null
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    // Leaving the overview (Back gesture or the map's back arrow) used to
+    // drop a freshly built — or edited — itinerary without a word. Ask first
+    // whenever there's something unsaved.
+    var showLeaveConfirm by remember { mutableStateOf(false) }
+
+    fun requestClose() {
+        // A route still being built goes back to the previous wizard step
+        // with its selections intact, rather than out of the builder.
+        if (viewModel.stepBack()) return
+        if (viewModel.hasUnsavedChanges()) {
+            showLeaveConfirm = true
+        } else {
+            viewModel.closeBuilder()
+        }
+    }
+
+    fun saveWithConfirmation() {
+        viewModel.saveItinerary {
+            android.widget.Toast
+                .makeText(context, "Itinerary saved", android.widget.Toast.LENGTH_SHORT)
+                .show()
+        }
+    }
+
+    // Registered after ExploreScreen's own BackHandler, so it takes
+    // precedence while the overview is showing.
+    androidx.activity.compose.BackHandler { requestClose() }
 
     val listState = rememberLazyListState()
 
@@ -140,115 +193,205 @@ fun ItineraryRouteOverviewScreen(
     // refetches it, so applying every intermediate position would fire a
     // burst of Routes API calls for orders nobody chose.
     var draggedKey by remember { mutableStateOf<String?>(null) }
-    var dragOffsetY by remember { mutableStateOf(0f) }
+    // Where the dragged card's top edge is drawn, in viewport pixels. Held
+    // in absolute terms rather than as an offset from the card's slot, so a
+    // swap (which moves the slot) or an auto-scroll (which moves the whole
+    // list) never needs compensating: the card simply stays under the
+    // finger.
+    var dragTopY by remember { mutableFloatStateOf(0f) }
+    // Where the card was picked up, so auto-scroll can tell which way the
+    // visitor is actually heading.
+    var dragStartTopY by remember { mutableFloatStateOf(0f) }
     var dragStartIndex by remember { mutableStateOf(-1) }
     var dragCurrentIndex by remember { mutableStateOf(-1) }
+    // Lazy-list index of the first stop, so a layout that hasn't caught up
+    // with the latest swap yet can be recognised and skipped.
+    var firstStopLazyIndex by remember { mutableStateOf(0) }
     var reorderPreview by remember {
         mutableStateOf<List<ItineraryPlanner.ScheduledStop>?>(null)
     }
 
     val isReordering = draggedKey != null
 
+    // After release, the card glides the last few pixels from under the
+    // finger into its slot instead of snapping there.
+    val settleScope = rememberCoroutineScope()
+    val settleOffset = remember { Animatable(0f) }
+    var settlingKey by remember { mutableStateOf<String?>(null) }
+
+    val density = LocalDensity.current
+    val autoScrollZonePx = with(density) { AUTO_SCROLL_ZONE.toPx() }
+    val autoScrollMaxStepPx = with(density) { AUTO_SCROLL_MAX_STEP.toPx() }
+    val dragSlopPx = with(density) { 8.dp.toPx() }
+
     val displayedSchedule = reorderPreview ?: uiState.schedule
 
-    fun beginDrag(index: Int, key: String) {
-        expandedStopId = null
+    // The index is looked up from the key at the moment the drag starts.
+    // The card's pointerInput outlives recompositions, so an index captured
+    // when the card was first composed goes stale after a stop is removed or
+    // reordered, and a stale index past the end of the list used to crash
+    // the reorder's removeAt().
+    fun beginDrag(key: String) {
+        val index = uiState.schedule.indexOfFirst { timelineKey(it.stop) == key }
+        if (index < 0) return
+        settlingKey = null
+        val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key } ?: return
         reorderPreview = uiState.schedule
         draggedKey = key
         dragStartIndex = index
         dragCurrentIndex = index
-        dragOffsetY = 0f
+        firstStopLazyIndex = info.index - index
+        dragTopY = info.offset.toFloat()
+        dragStartTopY = dragTopY
         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
     }
 
-    fun onDragBy(deltaY: Float) {
+    // Moves the dragged stop once its centre has crossed a neighbour's
+    // centre. Comparing against the neighbour's midpoint in the direction
+    // of travel (rather than "is the centre inside that card") means a
+    // swap can never immediately undo itself.
+    fun reorderIfNeeded() {
 
         val key = draggedKey ?: return
         val preview = reorderPreview ?: return
-
-        dragOffsetY += deltaY
+        if (dragCurrentIndex !in preview.indices) return
 
         val layout = listState.layoutInfo
-
         val current = layout.visibleItemsInfo.firstOrNull { it.key == key } ?: return
 
-        // Where the dragged card is actually drawn right now: its laid-out
-        // slot plus however far the finger has carried it.
-        val draggedCenter = current.offset + (current.size / 2f) + dragOffsetY
+        // The list hasn't been re-laid-out since the last swap; its
+        // positions still describe the old order.
+        if (current.index - firstStopLazyIndex != dragCurrentIndex) return
 
-        val stopKeys = preview.map { it.stop.refId }.toSet()
+        val draggedCenter = dragTopY + current.size / 2f
 
-        val target = layout.visibleItemsInfo.firstOrNull { candidate ->
-            candidate.key != key &&
-                candidate.key in stopKeys &&
-                draggedCenter >= candidate.offset &&
-                draggedCenter <= candidate.offset + candidate.size
+        val stopKeys = preview.map { timelineKey(it.stop) }.toSet()
+        val neighbours = layout.visibleItemsInfo.filter { it.key != key && it.key in stopKeys }
+
+        val target = if (draggedCenter > current.offset + current.size / 2f) {
+            neighbours.lastOrNull { it.index > current.index && draggedCenter > it.offset + it.size / 2f }
+        } else {
+            neighbours.firstOrNull { it.index < current.index && draggedCenter < it.offset + it.size / 2f }
         } ?: return
 
-        val toIndex = preview.indexOfFirst { it.stop.refId == target.key }
+        val toIndex = preview.indexOfFirst { timelineKey(it.stop) == target.key }
 
         if (toIndex < 0 || toIndex == dragCurrentIndex) return
+
+        // A LazyColumn keeps its scroll position pinned to the KEY of the
+        // first visible item. When that item is the one being dragged, or
+        // the one it swaps with, the list would scroll to follow the key to
+        // its new slot — shifting every card under the finger. That jump is
+        // what made dragging upward toward the top of the list feel like it
+        // was fighting back. Pinning the position by index for this swap
+        // keeps the list still; only the two cards trade places.
+        val firstVisible = listState.firstVisibleItemIndex
+        if (current.index == firstVisible || target.index == firstVisible) {
+            listState.requestScrollToItem(firstVisible, listState.firstVisibleItemScrollOffset)
+        }
 
         reorderPreview = preview.toMutableList().apply {
             add(toIndex, removeAt(dragCurrentIndex))
         }
-
-        // The card is about to be re-laid-out into the slot it swapped
-        // with, so cancel that jump out of the offset and it stays put
-        // under the finger.
-        dragOffsetY -= (target.offset - current.offset)
 
         dragCurrentIndex = toIndex
 
         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
     }
 
+    fun onDragBy(deltaY: Float) {
+        if (draggedKey == null) return
+        dragTopY += deltaY
+        reorderIfNeeded()
+    }
+
     fun endDrag(commit: Boolean) {
 
+        // Only here does the new order reach the ViewModel (and the route
+        // recalculation behind it).
         if (commit && dragStartIndex >= 0 && dragCurrentIndex != dragStartIndex) {
             viewModel.moveStop(dragStartIndex, dragCurrentIndex)
         }
 
+        // On cancel the preview is thrown away and the card returns to its
+        // original slot, so there's no meaningful distance to glide from.
+        val releasedKey = draggedKey
+        val releasedAt = releasedKey?.let { key ->
+            listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }?.let { dragTopY - it.offset }
+        }
+        if (commit && releasedKey != null && releasedAt != null) {
+            settlingKey = releasedKey
+            settleScope.launch {
+                settleOffset.snapTo(releasedAt)
+                settleOffset.animateTo(0f, spring(stiffness = Spring.StiffnessMediumLow))
+                if (settlingKey == releasedKey) settlingKey = null
+            }
+        }
+
         draggedKey = null
-        dragOffsetY = 0f
+        dragTopY = 0f
+        dragStartTopY = 0f
         dragStartIndex = -1
         dragCurrentIndex = -1
         reorderPreview = null
     }
 
-    // Dragging a stop past the edge of the viewport scrolls the list rather
-    // than dead-ending, so a stop can be moved further than one screenful.
-    // Whatever the list actually consumes is added back to the drag offset,
-    // which keeps the card pinned to the finger while the content moves
-    // underneath it.
+    // How far the dragged card is drawn from its laid-out slot. Read inside
+    // graphicsLayer, so following the finger only redraws that one card
+    // instead of recomposing the whole timeline every frame.
+    val dragTranslation: (String) -> Float = { key ->
+        listState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.key == key }
+            ?.let { dragTopY - it.offset }
+            ?: 0f
+    }
+
+    // Auto-scroll while a card is held near the top or bottom edge.
+    //
+    // Two things were wrong with the old loop, and together they were the
+    // "resistance" when dragging upward and the card landing in the wrong
+    // place:
+    //  - its edge zone was 90% of a card's height, on a list viewport only a
+    //    few cards tall, so simply picking up a card near the bottom started
+    //    scrolling the list DOWN — the opposite of an upward drag — and slid
+    //    other stops under it;
+    //  - it stepped on a 16 ms timer rather than on frames, so the scroll
+    //    stuttered against the finger.
+    // Now the zone is a fixed strip at each edge, it only scrolls in the
+    // direction the card has actually been moved, speed grows the deeper the
+    // card goes into the strip, and it runs once per frame.
     LaunchedEffect(draggedKey) {
 
-        if (draggedKey == null) return@LaunchedEffect
+        val key = draggedKey ?: return@LaunchedEffect
 
-        while (true) {
+        while (isActive && draggedKey == key) {
+
+            withFrameNanos { }
 
             val layout = listState.layoutInfo
+            val current = layout.visibleItemsInfo.firstOrNull { it.key == key } ?: continue
 
-            val current = layout.visibleItemsInfo.firstOrNull { it.key == draggedKey }
+            val top = dragTopY
+            val bottom = dragTopY + current.size
+            val viewportTop = layout.viewportStartOffset.toFloat()
+            val viewportBottom = layout.viewportEndOffset.toFloat()
+            val moved = dragTopY - dragStartTopY
 
-            if (current != null) {
-
-                val draggedCenter = current.offset + (current.size / 2f) + dragOffsetY
-
-                val edge = current.size * 0.9f
-
-                val step = when {
-                    draggedCenter < layout.viewportStartOffset + edge -> -14f
-                    draggedCenter > layout.viewportEndOffset - edge -> 14f
-                    else -> 0f
+            val step = when {
+                moved < -dragSlopPx && top < viewportTop + autoScrollZonePx -> {
+                    val depth = ((viewportTop + autoScrollZonePx - top) / autoScrollZonePx).coerceIn(0.15f, 1f)
+                    -autoScrollMaxStepPx * depth
                 }
-
-                if (step != 0f) {
-                    dragOffsetY += listState.scrollBy(step)
+                moved > dragSlopPx && bottom > viewportBottom - autoScrollZonePx -> {
+                    val depth = ((bottom - (viewportBottom - autoScrollZonePx)) / autoScrollZonePx).coerceIn(0.15f, 1f)
+                    autoScrollMaxStepPx * depth
                 }
+                else -> 0f
             }
 
-            delay(16)
+            if (step != 0f && listState.scrollBy(step) != 0f) {
+                reorderIfNeeded()
+            }
         }
     }
 
@@ -282,17 +425,66 @@ fun ItineraryRouteOverviewScreen(
         }
     }
 
+    TutorialTour(
+        id = "route_overview",
+        enabled = !uiState.isGeneratingRoute && uiState.generatedStops.isNotEmpty(),
+        steps = listOf(
+            TutorialStep(
+                target = "route_map",
+                title = "Your route",
+                body = "Your stops are numbered on the map in the order you'll visit them, joined by the path to walk."
+            ),
+            TutorialStep(
+                target = "route_name",
+                title = "Name your trip",
+                body = "We gave it a name already. Tap the pencil to change it to something you'll recognize."
+            ),
+            TutorialStep(
+                target = "route_mode",
+                title = "How you'll get around",
+                body = "Walk, drive or ride. Times and the route update to match."
+            ),
+            TutorialStep(
+                target = "route_summary",
+                title = "Your day at a glance",
+                body = "Number of stops, total distance and travel time. Tap the start time to change when your day begins."
+            ),
+            TutorialStep(
+                target = "route_first_stop",
+                title = "Your stops, in order",
+                body = "Each stop shows when you'll arrive. Press and hold a stop to drag it to a new spot, or tap it for details."
+            ),
+            TutorialStep(
+                target = "route_add_stop",
+                title = "Add a stop",
+                body = "Forgot something? Add another site or place to your day."
+            ),
+            TutorialStep(
+                target = "route_start",
+                title = "Start your trip",
+                body = "Begins turn-by-turn directions to your first stop. Each time you arrive, the next one is ready."
+            ),
+            TutorialStep(
+                target = "route_save",
+                title = "Or save it for later",
+                body = "Keeps the plan in My Itineraries so you can start it another day."
+            )
+        )
+    )
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(SurfaceSoft)
     ) {
 
-        RouteMap(
-            uiState = uiState,
-            cameraPositionState = cameraPositionState,
-            onBack = { viewModel.closeBuilder() }
-        )
+        Box(Modifier.tutorialTarget("route_map")) {
+            RouteMap(
+                uiState = uiState,
+                cameraPositionState = cameraPositionState,
+                onBack = { requestClose() }
+            )
+        }
 
         LazyColumn(
             state = listState,
@@ -302,11 +494,13 @@ fun ItineraryRouteOverviewScreen(
         ) {
 
             item {
-                TripHeader(
-                    name = uiState.itineraryName,
-                    usedFallbackLocation = uiState.usedFallbackLocation,
-                    onRename = { showRenameDialog = true }
-                )
+                Box(Modifier.tutorialTarget("route_name")) {
+                    TripHeader(
+                        name = uiState.itineraryName,
+                        usedFallbackLocation = uiState.usedFallbackLocation,
+                        onRename = { showRenameDialog = true }
+                    )
+                }
             }
 
             uiState.errorMessage?.let { message ->
@@ -318,30 +512,62 @@ fun ItineraryRouteOverviewScreen(
                 }
             }
 
-            item {
-                TravelModeSelector(
-                    selected = uiState.travelMode,
-                    onSelect = { viewModel.setTravelMode(it) }
-                )
+            uiState.infoMessage?.let { message ->
+                item {
+                    RouteInfoBanner(
+                        message = message,
+                        onDismiss = viewModel::clearInfoMessage
+                    )
+                }
             }
 
             item {
-                TripSummaryCard(
-                    uiState = uiState,
-                    onStartTimeClick = { showStartTimePicker = true }
-                )
+                Box(Modifier.tutorialTarget("route_mode")) {
+                    TravelModeSelector(
+                        selected = uiState.travelMode,
+                        onSelect = { viewModel.setTravelMode(it) }
+                    )
+                }
+            }
+
+            item {
+                Box(Modifier.tutorialTarget("route_summary")) {
+                    TripSummaryCard(
+                        uiState = uiState,
+                        onStartTimeClick = { showStartTimePicker = true }
+                    )
+                }
+            }
+
+            // Credit lines the drawn route needs (OpenStreetMap-based legs).
+            val routeCredits = uiState.routePath?.attributions.orEmpty()
+            if (routeCredits.isNotEmpty()) {
+                item {
+                    Text(
+                        text = routeCredits.joinToString("\n"),
+                        fontSize = 10.sp,
+                        lineHeight = 13.sp,
+                        color = TextSecondary
+                    )
+                }
             }
 
             if (uiState.routeIsApproximate && !uiState.isLoadingRoutePath) {
-                item { ApproximateRouteNotice() }
+                item {
+                    ApproximateRouteNotice(
+                        unroutedLegs = uiState.routePath?.unroutedLegCount ?: 0,
+                        travelMode = uiState.travelMode,
+                        onRetry = { viewModel.retryRoutePath() }
+                    )
+                }
             }
 
             item {
-                SectionHeaderRow(
-                    title = "Your Day",
-                    actionLabel = "Optimize Order",
-                    actionIcon = Icons.Default.Route,
-                    onAction = { viewModel.optimizeStopOrder() }
+                Text(
+                    text = "Your Day",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
                 )
             }
 
@@ -349,10 +575,13 @@ fun ItineraryRouteOverviewScreen(
 
             itemsIndexed(
                 items = displayedSchedule,
-                key = { _, scheduled -> scheduled.stop.refId }
+                // refType is part of the key: a site and a place can share a
+                // Firestore document id, and a repeated LazyColumn key crashes.
+                key = { _, scheduled -> timelineKey(scheduled.stop) }
             ) { index, scheduled ->
 
                 val stopKey = scheduled.stop.refId
+                val itemKey = timelineKey(scheduled.stop)
 
                 TimelineStop(
                     index = index,
@@ -360,24 +589,35 @@ fun ItineraryRouteOverviewScreen(
                     scheduled = scheduled,
                     startTimeMinutes = uiState.startTimeMinutes,
                     travelMode = uiState.travelMode,
-                    isCompleted = stopKey in uiState.completedStopIds,
-                    isExpanded = expandedStopId == stopKey,
+                    isCompleted = scheduled.stop.status == StopStatus.COMPLETED,
                     // Walk legs and arrival times belong to an order that is
                     // still being decided, so they're withheld mid-drag
                     // rather than shown wrong.
                     isReordering = isReordering,
-                    isDragged = draggedKey == stopKey,
-                    dragOffsetY = if (draggedKey == stopKey) dragOffsetY else 0f,
-                    onDragStart = { beginDrag(index, stopKey) },
+                    // Neighbours glide into their new slots; the dragged
+                    // card is positioned by the finger, so it opts out.
+                    modifier = (if (index == 0) Modifier.tutorialTarget("route_first_stop") else Modifier).animateItem(
+                        fadeInSpec = null,
+                        fadeOutSpec = null,
+                        placementSpec = if (draggedKey == itemKey || settlingKey == itemKey) null else spring(
+                            stiffness = Spring.StiffnessMediumLow,
+                            visibilityThreshold = IntOffset.VisibilityThreshold
+                        )
+                    ),
+                    // Still lifted while it settles, so it stays drawn
+                    // above the neighbours it's gliding past.
+                    isDragged = draggedKey == itemKey || settlingKey == itemKey,
+                    dragOffsetY = {
+                        when (itemKey) {
+                            draggedKey -> dragTranslation(itemKey)
+                            settlingKey -> settleOffset.value
+                            else -> 0f
+                        }
+                    },
+                    onDragStart = { beginDrag(itemKey) },
                     onDragBy = { delta -> onDragBy(delta) },
                     onDragStop = { endDrag(commit = true) },
                     onDragCancel = { endDrag(commit = false) },
-                    onToggleExpanded = {
-                        expandedStopId = if (expandedStopId == stopKey) null else stopKey
-                    },
-                    onVisitMinutesChange = { minutes ->
-                        viewModel.setVisitMinutes(stopKey, minutes)
-                    },
                     onMoveUp = { viewModel.moveStopUp(index) },
                     onMoveDown = { viewModel.moveStopDown(index) },
                     onRemove = { viewModel.removeStop(stopKey) },
@@ -392,7 +632,9 @@ fun ItineraryRouteOverviewScreen(
             }
 
             item {
-                AddStopButton(onClick = { viewModel.openAddStopSheet() })
+                Box(Modifier.tutorialTarget("route_add_stop")) {
+                    AddStopButton(onClick = { viewModel.openAddStopSheet() })
+                }
             }
 
             if (isEditingExisting) {
@@ -420,10 +662,10 @@ fun ItineraryRouteOverviewScreen(
             isEditingExisting = isEditingExisting,
             onStartTrip = {
                 viewModel.beginTrip { firstStopId ->
-                    navController.navigate(Routes.Map.createRoute(firstStopId))
+                    navController.navigateSafely(Routes.Map.createRoute(firstStopId, autoStart = true))
                 }
             },
-            onSave = { viewModel.saveItinerary {} }
+            onSave = { saveWithConfirmation() }
         )
     }
 
@@ -445,6 +687,38 @@ fun ItineraryRouteOverviewScreen(
             onSelect = { minutes ->
                 viewModel.setStartTimeMinutes(minutes)
                 showStartTimePicker = false
+            }
+        )
+    }
+
+    if (showLeaveConfirm) {
+        AlertDialog(
+            onDismissRequest = { showLeaveConfirm = false },
+            title = { Text(if (isEditingExisting) "Save your changes?" else "Save this itinerary?") },
+            text = {
+                Text(
+                    if (isEditingExisting) {
+                        "You've changed this itinerary. Leaving now will discard those changes."
+                    } else {
+                        "This route hasn't been saved yet. Leaving now will discard it."
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showLeaveConfirm = false
+                    saveWithConfirmation()
+                }) {
+                    Text("Save", color = Primary, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showLeaveConfirm = false
+                    viewModel.closeBuilder()
+                }) {
+                    Text("Discard", color = Danger)
+                }
             }
         )
     }
@@ -481,6 +755,9 @@ fun ItineraryRouteOverviewScreen(
     ItineraryStopPreviewHost(viewModel)
 }
 
+/** LazyColumn / drag key for a stop — refType included so a site and a place with the same id can't collide. */
+private fun timelineKey(stop: ItineraryStop): String = "${stop.refType}:${stop.refId}"
+
 // ---------------------------------------------------------------- map
 
 @Composable
@@ -501,6 +778,7 @@ private fun RouteMap(
             modifier = Modifier.fillMaxSize(),
             cameraPositionState = cameraPositionState,
             properties = rememberThemedMapProperties(),
+            mapColorScheme = rememberThemedMapColorScheme(),
             uiSettings = MapUiSettings(
                 zoomControlsEnabled = false,
                 mapToolbarEnabled = false
@@ -517,13 +795,19 @@ private fun RouteMap(
                 // instead of blending into the rest of the line.
                 path.legs.forEach { leg ->
 
-                    val destinationId = uiState.generatedStops
+                    val destinationCompleted = uiState.generatedStops
                         .getOrNull(leg.toIndex)
-                        ?.refId
-                    val destinationCompleted = destinationId != null &&
-                        destinationId in uiState.completedStopIds
+                        ?.status == StopStatus.COMPLETED
 
-                    if (destinationCompleted) {
+                    if (leg.isStraightLineFallback) {
+
+                        // No real route for this leg. Nothing is drawn: a
+                        // line straight through walls and buildings looks
+                        // like a walking route and isn't one. The numbered
+                        // pins still show both stops, and the notice in the
+                        // list says which leg couldn't be routed.
+
+                    } else if (destinationCompleted) {
 
                         Polyline(
                             points = leg.points,
@@ -535,7 +819,7 @@ private fun RouteMap(
                             zIndex = 2f
                         )
 
-                    } else if (!leg.isStraightLineFallback) {
+                    } else {
 
                         // Wider white line underneath lifts the route off the
                         // map's own roads at a glance.
@@ -559,37 +843,19 @@ private fun RouteMap(
                             zIndex = 2f
                         )
 
-                    } else {
-
-                        Polyline(
-                            points = leg.points,
-                            color = TextTertiary,
-                            width = 8f,
-                            pattern = listOf(Dash(22f), Gap(16f)),
-                            jointType = JointType.ROUND,
-                            zIndex = 2f
-                        )
                     }
                 }
 
-            } else if (uiState.generatedStops.size >= 2) {
-
-                // Pre-route placeholder. Dashed and grey on purpose — this is
-                // the connect-the-dots line, and it should never be mistaken
-                // for the walking route that replaces it a moment later.
-                Polyline(
-                    points = uiState.generatedStops.map { LatLng(it.latitude, it.longitude) },
-                    color = TextTertiary,
-                    width = 8f,
-                    pattern = listOf(Dash(22f), Gap(16f)),
-                    jointType = JointType.ROUND,
-                    zIndex = 2f
-                )
             }
+
+            // No placeholder line while the route loads: a connect-the-dots
+            // line is exactly the straight-through-buildings path this map
+            // must never suggest. The pins are enough until the real route
+            // arrives.
 
             uiState.generatedStops.forEachIndexed { index, stop ->
 
-                val isCompleted = stop.refId in uiState.completedStopIds
+                val isCompleted = stop.status == StopStatus.COMPLETED
                 val pinColor = when {
                     isCompleted -> CompletedContentColor
                     stop.isRecommended -> AccentGold
@@ -600,8 +866,12 @@ private fun RouteMap(
                     numberedPin(number = index + 1, fillColor = pinColor.toArgb())
                 }
 
+                val markerState = remember(stop.refType, stop.refId, stop.latitude, stop.longitude) {
+                    MarkerState(position = LatLng(stop.latitude, stop.longitude))
+                }
+
                 Marker(
-                    state = MarkerState(position = LatLng(stop.latitude, stop.longitude)),
+                    state = markerState,
                     title = "${index + 1}. ${stop.name}${if (isCompleted) " · Done" else ""}",
                     icon = icon,
                     anchor = Offset(0.5f, 1f),
@@ -612,18 +882,23 @@ private fun RouteMap(
 
         Box(
             modifier = Modifier
+                .align(Alignment.TopStart)
+                // Sits over a full-bleed map, so it insets itself — BEFORE
+                // the circle is drawn. The status-bar inset used to be
+                // applied after clip/background, so it became part of the
+                // button: a tall dark pill running up behind the clock.
+                .statusBarsPadding()
                 .padding(16.dp)
+                .size(44.dp)
+                .shadow(4.dp, CircleShape)
                 .clip(CircleShape)
                 .background(CardSurface)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                     onClick = onBack
-                )
-                .align(Alignment.TopStart)
-                // Sits over a full-bleed map, so it insets itself.
-                .statusBarsPadding()
-                .padding(10.dp)
+                ),
+            contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -750,13 +1025,16 @@ private fun TripHeader(
                 imageVector = Icons.Default.Edit,
                 contentDescription = "Rename",
                 tint = TextSecondary,
+                // Bigger tap area around the same 18dp icon.
                 modifier = Modifier
-                    .size(18.dp)
+                    .clip(CircleShape)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
                         onClick = onRename
                     )
+                    .padding(11.dp)
+                    .size(18.dp)
             )
         }
 
@@ -873,13 +1151,13 @@ private fun TripSummaryCard(
             SummaryStat(
                 icon = Icons.Default.AccessTime,
                 value = formatDuration(
-                    if (uiState.itineraryStatus == "completed") {
+                    if (uiState.itineraryStatus == ItineraryStatus.COMPLETED) {
                         uiState.actualTripMinutes ?: uiState.totalTripMinutes
                     } else {
                         uiState.totalTripMinutes
                     }
                 ),
-                label = if (uiState.itineraryStatus == "completed") "Actual" else "Estimated"
+                label = if (uiState.itineraryStatus == ItineraryStatus.COMPLETED) "Actual" else "Estimated"
             )
         }
 
@@ -966,93 +1244,82 @@ private fun SummaryStat(
     }
 }
 
+/**
+ * Shown when one or more legs have no real route. Those legs are not drawn
+ * on the map and their times are estimates; this says so, and offers a
+ * retry (most failures are a dropped connection).
+ */
 @Composable
-private fun ApproximateRouteNotice() {
+private fun ApproximateRouteNotice(
+    unroutedLegs: Int,
+    travelMode: TravelMode,
+    onRetry: () -> Unit
+) {
+
+    val modeWord = when (travelMode) {
+        TravelMode.WALKING -> "walking"
+        TravelMode.DRIVING -> "driving"
+        TravelMode.MOTORCYCLE -> "riding"
+    }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(PrimarySoft)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.Top
+            .background(DangerSurface)
+            .padding(start = 12.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
 
         Icon(
-            imageVector = Icons.Default.Straighten,
+            imageVector = Icons.Default.Info,
             contentDescription = null,
-            tint = Primary,
-            modifier = Modifier
-                .padding(top = 1.dp)
-                .size(14.dp)
+            tint = Danger,
+            modifier = Modifier.size(16.dp)
         )
 
         Spacer(Modifier.width(8.dp))
 
-        Text(
-            text = "Some legs couldn't be routed and are shown as dashed " +
-                "straight lines \u2014 those distances are estimates.",
-            fontSize = 11.5.sp,
-            color = TextPrimary,
-            lineHeight = 15.sp
-        )
-    }
-}
-
-@Composable
-private fun SectionHeaderRow(
-    title: String,
-    actionLabel: String,
-    actionIcon: ImageVector,
-    onAction: () -> Unit
-) {
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-
-        Text(
-            text = title,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            color = TextPrimary
-        )
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .clip(RoundedCornerShape(50))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onAction
-                )
-                .padding(horizontal = 4.dp, vertical = 4.dp)
-        ) {
-
-            Icon(
-                imageVector = actionIcon,
-                contentDescription = null,
-                tint = Primary,
-                modifier = Modifier.size(15.dp)
-            )
-
-            Spacer(Modifier.width(5.dp))
-
+        Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = actionLabel,
-                color = Primary,
-                fontSize = 12.5.sp,
-                fontWeight = FontWeight.Bold
+                text = if (unroutedLegs == 1) {
+                    "No $modeWord route found for 1 leg"
+                } else {
+                    "No $modeWord route found for $unroutedLegs legs"
+                },
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
             )
+            Text(
+                text = "Those legs aren't drawn on the map, and their times are estimates.",
+                fontSize = 11.sp,
+                color = TextSecondary,
+                lineHeight = 15.sp
+            )
+        }
+
+        TextButton(onClick = onRetry) {
+            Text("Retry", color = Primary, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
         }
     }
 }
 
 // ---------------------------------------------------------------- timeline
 
+/**
+ * One stop in the built itinerary.
+ *
+ * Every card has the same structure wherever it sits in the list: name,
+ * arrival time, and how you get there from the previous stop. The travel
+ * line used to be a separate row ABOVE each card except the first, joined
+ * by a connector stub — so a card changed height the moment it was dragged
+ * into or out of first place, and jumped under the finger. Inside the card,
+ * and reading "First stop" on the first, it can't.
+ *
+ * The estimated stay ("20 min here") and its picker are gone: they were
+ * planning detail, not something anyone needs while walking the route.
+ */
 @Composable
 private fun TimelineStop(
     index: Int,
@@ -1061,322 +1328,296 @@ private fun TimelineStop(
     startTimeMinutes: Int,
     travelMode: TravelMode,
     isCompleted: Boolean,
-    isExpanded: Boolean,
     isReordering: Boolean,
     isDragged: Boolean,
-    dragOffsetY: Float,
+    dragOffsetY: () -> Float,
     onDragStart: () -> Unit,
     onDragBy: (Float) -> Unit,
     onDragStop: () -> Unit,
     onDragCancel: () -> Unit,
-    onToggleExpanded: () -> Unit,
-    onVisitMinutesChange: (Int) -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
     onRemove: () -> Unit,
-    onOpenDetails: () -> Unit
+    onOpenDetails: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
 
     val stop = scheduled.stop
 
-    Column(
-        modifier = Modifier
+    // pointerInput(stop.refId) keeps running across recompositions, so the
+    // gesture handlers must read the latest callbacks rather than the ones
+    // captured when the card first appeared.
+    val latestDragStart by rememberUpdatedState(onDragStart)
+    val latestDragBy by rememberUpdatedState(onDragBy)
+    val latestDragStop by rememberUpdatedState(onDragStop)
+    val latestDragCancel by rememberUpdatedState(onDragCancel)
+
+    Row(
+        modifier = modifier
             .fillMaxWidth()
             // The card being dragged has to paint over its neighbours as it
             // passes them, and translate freely of its laid-out slot.
             .zIndex(if (isDragged) 1f else 0f)
             .graphicsLayer {
-                translationY = dragOffsetY
+                translationY = dragOffsetY()
                 val lift = if (isDragged) 1.03f else 1f
                 scaleX = lift
                 scaleY = lift
             }
+            .shadow(
+                elevation = if (isDragged) 12.dp else 2.dp,
+                shape = RoundedCornerShape(16.dp)
+            )
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (isCompleted && !isDragged) CompletedSurfaceColor else CardSurface)
+            // Press and hold anywhere on the card to pick it up. The
+            // handle on the right does the same without the wait, for
+            // anyone who already knows where they're going.
+            .pointerInput(stop.refId) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { latestDragStart() },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        latestDragBy(amount.y)
+                    },
+                    onDragEnd = { latestDragStop() },
+                    onDragCancel = { latestDragCancel() }
+                )
+            }
+            // Dragging is a pointer gesture, so it doesn't exist for
+            // anyone navigating by screen reader or switch access.
+            // These give the same two moves as explicit actions.
+            .semantics {
+                customActions = listOf(
+                    CustomAccessibilityAction("Move earlier") {
+                        onMoveUp(); true
+                    },
+                    CustomAccessibilityAction("Move later") {
+                        onMoveDown(); true
+                    }
+                )
+            }
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
 
-        // Travel leg into this stop, sitting between the two cards where the
-        // walk actually happens. It keeps its place in the layout during a
-        // drag — collapsing every leg at once would yank the list out from
-        // under the finger — but its numbers are withheld, since they
-        // describe an order that's still being decided.
-        if (index > 0) {
-            TravelLegRow(
-                minutes = scheduled.travelMinutesToHere,
-                meters = scheduled.travelMetersToHere,
-                isApproximate = scheduled.travelIsApproximate,
-                travelMode = travelMode,
-                isPending = isReordering
+        Box(
+            modifier = Modifier
+                .size(26.dp)
+                .clip(CircleShape)
+                .background(
+                    when {
+                        isCompleted -> CompletedContentColor
+                        stop.isRecommended -> AccentGold
+                        else -> Primary
+                    }
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = (index + 1).toString(),
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.5.sp
             )
         }
 
-        Row(
+        Spacer(Modifier.width(10.dp))
+
+        // The thumbnail doubles as "what was this place again?" — the
+        // one question a built itinerary still leaves open, especially
+        // for stops that arrived via Smart Recommendations.
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .shadow(
-                    elevation = if (isDragged) 12.dp else 2.dp,
-                    shape = RoundedCornerShape(16.dp)
+                .size(54.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(SurfaceSoft)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClickLabel = "View details",
+                    onClick = onOpenDetails
                 )
-                .clip(RoundedCornerShape(16.dp))
-                .background(
-                    when {
-                        isDragged -> CardSurface
-                        isCompleted -> CompletedSurfaceColor
-                        else -> CardSurface
-                    }
-                )
-                // Press and hold anywhere on the card to pick it up. The
-                // handle on the right does the same without the wait, for
-                // anyone who already knows where they're going.
-                .pointerInput(stop.refId) {
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = { onDragStart() },
-                        onDrag = { change, amount ->
-                            change.consume()
-                            onDragBy(amount.y)
-                        },
-                        onDragEnd = { onDragStop() },
-                        onDragCancel = { onDragCancel() }
-                    )
-                }
-                // Dragging is a pointer gesture, so it doesn't exist for
-                // anyone navigating by screen reader or switch access.
-                // These give the same two moves as explicit actions.
-                .semantics {
-                    customActions = listOf(
-                        CustomAccessibilityAction("Move earlier") {
-                            onMoveUp(); true
-                        },
-                        CustomAccessibilityAction("Move later") {
-                            onMoveDown(); true
-                        }
-                    )
-                }
-                .padding(12.dp),
-            verticalAlignment = Alignment.Top
         ) {
+            if (stop.imageUrl.isNotBlank()) {
+                AsyncImage(
+                    model = stop.imageUrl,
+                    contentDescription = stop.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer(alpha = if (isCompleted) 0.45f else 1f)
+                )
+            }
 
             Box(
                 modifier = Modifier
-                    .size(26.dp)
+                    .align(Alignment.BottomEnd)
+                    .padding(3.dp)
+                    .size(16.dp)
                     .clip(CircleShape)
-                    .background(
-                        when {
-                            isCompleted -> CompletedContentColor
-                            stop.isRecommended -> AccentGold
-                            else -> Primary
-                        }
-                    ),
+                    .background(Color.White.copy(alpha = 0.92f)),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = (index + 1).toString(),
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 11.5.sp
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = null,
+                    tint = Primary,
+                    modifier = Modifier.size(11.dp)
                 )
             }
+        }
 
-            Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(12.dp))
 
-            // The thumbnail doubles as "what was this place again?" — the
-            // one question a built itinerary still leaves open, especially
-            // for stops that arrived via Smart Recommendations.
-            Box(
-                modifier = Modifier
-                    .size(54.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(SurfaceSoft)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onOpenDetails
-                    )
-            ) {
-                if (stop.imageUrl.isNotBlank()) {
-                    AsyncImage(
-                        model = stop.imageUrl,
-                        contentDescription = stop.name,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer(alpha = if (isCompleted) 0.45f else 1f)
-                    )
-                }
+        Column(modifier = Modifier.weight(1f)) {
 
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(3.dp)
-                        .size(16.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.92f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Info,
-                        contentDescription = "View details",
-                        tint = Primary,
-                        modifier = Modifier.size(11.dp)
-                    )
-                }
-            }
-
-            Spacer(Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
 
                 Text(
                     text = stop.name,
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.5.sp,
                     color = if (isCompleted) TextTertiary else TextPrimary,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
 
-                Spacer(Modifier.height(3.dp))
-
-                Text(
-                    text = if (isReordering) {
-                        "Stop ${index + 1} of ${lastIndex + 1}"
-                    } else {
-                        "${formatClock(startTimeMinutes + scheduled.arrivalMinutesFromStart)}" +
-                            " \u2013 " +
-                            formatClock(startTimeMinutes + scheduled.departureMinutesFromStart)
-                    },
-                    fontSize = 11.5.sp,
-                    color = TextSecondary
-                )
-
-                Spacer(Modifier.height(7.dp))
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-
-                    if (isCompleted) {
-                        Surface(shape = RoundedCornerShape(50), color = CompletedContentColor) {
-                            Text(
-                                text = "Done",
-                                color = Color.White,
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
-                            )
-                        }
-                        Spacer(Modifier.width(6.dp))
-                    }
-
-                    // The visit duration doubles as the control that opens
-                    // the picker — the number you want to change is the
-                    // thing you tap.
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = if (isExpanded) PrimarySoft else SurfaceSoft,
-                        modifier = Modifier.clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = onToggleExpanded
-                        )
-                    ) {
+                if (isCompleted) {
+                    Spacer(Modifier.width(6.dp))
+                    Surface(shape = RoundedCornerShape(50), color = CompletedContentColor) {
                         Text(
-                            text = "${stop.estimatedVisitMinutes} min here",
-                            color = if (isExpanded) Primary else TextSecondary,
-                            fontSize = 10.5.sp,
+                            text = "Done",
+                            color = Color.White,
+                            fontSize = 9.5.sp,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                         )
                     }
-
-                    if (stop.isRecommended) {
-
-                        Spacer(Modifier.width(6.dp))
-
-                        Surface(shape = RoundedCornerShape(50), color = PrimarySoft) {
-                            Text(
-                                text = "Recommended",
-                                color = Primary,
-                                fontSize = 9.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                            )
-                        }
-                    }
-                }
-
-                AnimatedVisibility(visible = isExpanded) {
-
-                    Column {
-
-                        Spacer(Modifier.height(9.dp))
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-
-                            ItineraryPlanner.visitMinuteOptions.forEach { minutes ->
-
-                                val isSelected = minutes == stop.estimatedVisitMinutes
-
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(50))
-                                        .background(if (isSelected) Primary else SurfaceSoft)
-                                        .clickable(
-                                            interactionSource = remember { MutableInteractionSource() },
-                                            indication = null
-                                        ) { onVisitMinutesChange(minutes) }
-                                        .padding(horizontal = 9.dp, vertical = 5.dp)
-                                ) {
-                                    Text(
-                                        text = minutes.toString(),
-                                        color = if (isSelected) Color.White else TextSecondary,
-                                        fontSize = 10.5.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                        }
+                } else if (stop.isRecommended) {
+                    Spacer(Modifier.width(6.dp))
+                    Surface(shape = RoundedCornerShape(50), color = PrimarySoft) {
+                        Text(
+                            text = "Suggested",
+                            color = Primary,
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                        )
                     }
                 }
             }
 
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.height(3.dp))
 
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = if (isReordering) {
+                    "Stop ${index + 1} of ${lastIndex + 1}"
+                } else {
+                    "Arrive ${formatClock(startTimeMinutes + scheduled.arrivalMinutesFromStart)}"
+                },
+                fontSize = 11.5.sp,
+                color = TextSecondary,
+                maxLines = 1
+            )
+
+            Spacer(Modifier.height(3.dp))
+
+            // How to get here from the previous stop — the one number that
+            // matters while walking the route. Always one line, so every
+            // card is the same shape.
+            Row(verticalAlignment = Alignment.CenterVertically) {
 
                 Icon(
-                    imageVector = Icons.Default.DragHandle,
-                    contentDescription = "Reorder stop",
-                    tint = if (isDragged) Primary else TextTertiary,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .pointerInput(stop.refId) {
-                            detectDragGestures(
-                                onDragStart = { onDragStart() },
-                                onDrag = { change, amount ->
-                                    change.consume()
-                                    onDragBy(amount.y)
-                                },
-                                onDragEnd = { onDragStop() },
-                                onDragCancel = { onDragCancel() }
-                            )
+                    imageVector = if (index == 0) {
+                        Icons.Default.Flag
+                    } else {
+                        when (travelMode) {
+                            TravelMode.WALKING -> Icons.Default.DirectionsWalk
+                            TravelMode.DRIVING -> Icons.Default.DirectionsCar
+                            TravelMode.MOTORCYCLE -> Icons.Default.TwoWheeler
                         }
-                        .padding(9.dp)
+                    },
+                    contentDescription = null,
+                    tint = TextTertiary,
+                    modifier = Modifier.size(13.dp)
                 )
 
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.width(4.dp))
 
-                Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = "Remove stop",
-                    tint = TextTertiary,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = onRemove
-                        )
-                        .padding(11.dp)
+                Text(
+                    text = when {
+                        index == 0 -> "First stop"
+                        isReordering -> "Recalculating\u2026"
+                        else -> travelSummary(scheduled, travelMode)
+                    },
+                    fontSize = 11.sp,
+                    color = TextTertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
+
+        Spacer(Modifier.width(4.dp))
+
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+
+            Icon(
+                imageVector = Icons.Default.DragHandle,
+                contentDescription = "Reorder stop",
+                tint = if (isDragged) Primary else TextTertiary,
+                modifier = Modifier
+                    .size(40.dp)
+                    .pointerInput(stop.refId) {
+                        detectDragGestures(
+                            onDragStart = { latestDragStart() },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                latestDragBy(amount.y)
+                            },
+                            onDragEnd = { latestDragStop() },
+                            onDragCancel = { latestDragCancel() }
+                        )
+                    }
+                    .padding(9.dp)
+            )
+
+            Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = "Remove stop",
+                tint = TextTertiary,
+                modifier = Modifier
+                    .size(40.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onRemove
+                    )
+                    .padding(11.dp)
+            )
+        }
+    }
+}
+
+/** "6 min walk · 450 m", with "~" and "est." when the leg has no real route. */
+private fun travelSummary(scheduled: ItineraryPlanner.ScheduledStop, travelMode: TravelMode): String {
+    val verb = when (travelMode) {
+        TravelMode.WALKING -> "walk"
+        TravelMode.DRIVING -> "drive"
+        TravelMode.MOTORCYCLE -> "ride"
+    }
+    return buildString {
+        if (scheduled.travelIsApproximate) append("~")
+        append(scheduled.travelMinutesToHere)
+        append(" min ")
+        append(verb)
+        if (scheduled.travelMetersToHere > 0) {
+            append(" \u00b7 ")
+            append(formatDistance(scheduled.travelMetersToHere.toDouble()))
+        }
+        if (scheduled.travelIsApproximate) append(" (est.)")
     }
 }
 
@@ -1420,71 +1661,6 @@ private fun ReorderHintRow(isReordering: Boolean) {
 }
 
 @Composable
-private fun TravelLegRow(
-    minutes: Int,
-    meters: Int,
-    isApproximate: Boolean,
-    travelMode: TravelMode,
-    isPending: Boolean = false
-) {
-
-    val verb = when (travelMode) {
-        TravelMode.WALKING -> "walk"
-        TravelMode.DRIVING -> "drive"
-        TravelMode.MOTORCYCLE -> "ride"
-    }
-
-    Row(
-        modifier = Modifier.padding(start = 13.dp, top = 6.dp, bottom = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-
-        // Stub of the connector line, so the cards read as one continuous day
-        // rather than a stack of unrelated rows.
-        Box(
-            modifier = Modifier
-                .width(2.dp)
-                .height(26.dp)
-                .background(Outline)
-        )
-
-        Spacer(Modifier.width(12.dp))
-
-        Icon(
-            imageVector = when (travelMode) {
-                TravelMode.WALKING -> Icons.Default.DirectionsWalk
-                TravelMode.DRIVING -> Icons.Default.DirectionsCar
-                TravelMode.MOTORCYCLE -> Icons.Default.TwoWheeler
-            },
-            contentDescription = null,
-            tint = TextTertiary,
-            modifier = Modifier.size(14.dp)
-        )
-
-        Spacer(Modifier.width(6.dp))
-
-        Text(
-            text = if (isPending) {
-                "recalculating"
-            } else {
-                buildString {
-                    if (isApproximate) append("~")
-                    append(minutes)
-                    append(" min ")
-                    append(verb)
-                    if (meters > 0) {
-                        append(" \u00b7 ")
-                        append(formatDistance(meters.toDouble()))
-                    }
-                }
-            },
-            fontSize = 11.5.sp,
-            color = if (isPending) TextTertiary else TextSecondary
-        )
-    }
-}
-
-@Composable
 private fun AddStopButton(onClick: () -> Unit) {
 
     Row(
@@ -1517,6 +1693,48 @@ private fun AddStopButton(onClick: () -> Unit) {
             fontWeight = FontWeight.Bold,
             fontSize = 13.5.sp
         )
+    }
+}
+
+/** Neutral feedback banner, e.g. the "Optimize Order" result. Clears itself after a few seconds. */
+@Composable
+private fun RouteInfoBanner(
+    message: String,
+    onDismiss: () -> Unit
+) {
+
+    LaunchedEffect(message) {
+        delay(5000)
+        onDismiss()
+    }
+
+    Surface(
+        color = PrimarySoft,
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, top = 10.dp, end = 6.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Route,
+                contentDescription = null,
+                tint = Primary,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = message,
+                color = TextPrimary,
+                fontSize = 12.5.sp,
+                lineHeight = 17.sp,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onDismiss) {
+                Text("OK", color = Primary, fontWeight = FontWeight.Bold)
+            }
+        }
     }
 }
 
@@ -1573,7 +1791,7 @@ private fun BottomActionBar(
                 CircularProgressIndicator(color = Primary, modifier = Modifier.size(26.dp))
             }
 
-        } else if (uiState.itineraryStatus == "completed") {
+        } else if (uiState.itineraryStatus == ItineraryStatus.COMPLETED) {
 
             Surface(
                 shape = RoundedCornerShape(16.dp),
@@ -1599,18 +1817,21 @@ private fun BottomActionBar(
 
         } else {
 
-            PrimaryButton(
-                text = when {
-                    uiState.completedStopIds.isNotEmpty() -> "Resume Trip"
-                    else -> "Start Trip Now"
-                },
-                onClick = onStartTrip
-            )
+            Box(Modifier.tutorialTarget("route_start")) {
+                PrimaryButton(
+                    text = when {
+                        uiState.generatedStops.any { it.status != StopStatus.PENDING } -> "Resume Trip"
+                        else -> "Start Trip Now"
+                    },
+                    onClick = onStartTrip
+                )
+            }
 
             Spacer(Modifier.height(10.dp))
 
             Box(
                 modifier = Modifier
+                    .tutorialTarget("route_save")
                     .fillMaxWidth()
                     .height(50.dp)
                     .clip(RoundedCornerShape(16.dp))
@@ -1653,23 +1874,40 @@ private fun RenameDialog(
 ) {
 
     var text by remember { mutableStateOf(currentName) }
+    var touched by remember { mutableStateOf(false) }
+
+    // Live check: a name is required and kept short enough to fit its card.
+    val nameError = Validators.text(text, "Itinerary name", min = 1, max = ITINERARY_NAME_MAX)
+    val shownError = if (touched) nameError else null
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Rename Itinerary") },
         text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Primary,
-                    cursorColor = Primary
+            Column {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = {
+                        text = it
+                        touched = true
+                    },
+                    singleLine = true,
+                    isError = shownError != null,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Primary,
+                        cursorColor = Primary
+                    )
                 )
-            )
+                CharacterCounter(text.trim().length, ITINERARY_NAME_MAX)
+                FieldErrorText(shownError)
+            }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(text) }) {
+            TextButton(onClick = {
+                // Final check with the same rule.
+                touched = true
+                if (nameError == null) onConfirm(text.trim())
+            }) {
                 Text("Save", color = Primary, fontWeight = FontWeight.Bold)
             }
         },
@@ -1771,7 +2009,7 @@ private fun AddStopSheet(
             Spacer(Modifier.height(3.dp))
 
             Text(
-                text = "Tap \u2139 to see details \u2022 tap + to add",
+                text = "Tap a stop for details \u2022 tap + to add it",
                 fontSize = 11.5.sp,
                 color = TextSecondary,
                 modifier = Modifier.padding(horizontal = 20.dp)
@@ -1844,6 +2082,7 @@ private fun AddStopRow(
     onClick: () -> Unit,
     onInfoClick: () -> Unit
 ) {
+    // The row (picture or name) opens details; only the + adds the stop.
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1852,7 +2091,7 @@ private fun AddStopRow(
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-                onClick = onClick
+                onClick = onInfoClick
             )
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -1894,19 +2133,32 @@ private fun AddStopRow(
             )
         }
 
-        PreviewInfoButton(
-            onClick = onInfoClick,
-            background = CardSurface
-        )
-
-        Spacer(Modifier.width(2.dp))
-
-        Icon(
-            imageVector = Icons.Default.Add,
-            contentDescription = "Add",
-            tint = Primary,
-            modifier = Modifier.size(18.dp)
-        )
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onClick
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(PrimarySoft),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = "Add $title to trip",
+                    tint = Primary,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
     }
 }
 
@@ -1942,3 +2194,12 @@ internal fun formatDuration(minutes: Int): String {
 
     return if (remainder == 0) "${hours}h" else "${hours}h ${remainder}m"
 }
+
+/** Height of the strip at each edge of the stop list that auto-scrolls while a card is held in it. */
+private val AUTO_SCROLL_ZONE = 64.dp
+
+/** Fastest auto-scroll, per frame, when the card is pushed right to the edge. */
+private val AUTO_SCROLL_MAX_STEP = 12.dp
+
+/** Longest itinerary name accepted in Rename. */
+private const val ITINERARY_NAME_MAX = 60

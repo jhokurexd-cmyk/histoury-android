@@ -2,12 +2,14 @@ package com.histoury.app.ui.components
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import com.google.maps.android.compose.ComposeMapColorScheme
 import com.google.maps.android.compose.MapProperties
 import com.google.android.gms.maps.model.MapStyleOptions
 import com.histoury.app.theme.isDarkTheme
 
 /**
- * A night style for the Google Maps views.
+ * A night style for the Google Maps views — now only used by lite-mode
+ * (static) maps; see [rememberThemedMapProperties].
  *
  * The maps are the one part of the app Compose doesn't paint — they render
  * their own tiles — so switching the palette leaves three glaring white
@@ -45,22 +47,43 @@ private const val NIGHT_STYLE_JSON = """
 """
 
 /**
- * Builds [MapProperties] carrying the night style when the app is dark and
- * no style at all when it isn't — passing null restores the SDK's default,
- * so light mode is untouched.
+ * The map's colour scheme, following the APP's light/dark setting (not the
+ * phone's, which can differ).
+ *
+ * Interactive maps use Google's own dark scheme (Maps SDK 19+) instead of
+ * the JSON night style above. The JSON style can only recolour whole
+ * feature groups — every "road" got one dark grey — so footpaths, sidewalks
+ * and pedestrian walkways ended up the same colour as the roads beside
+ * them, or vanished into the background. Google's dark scheme keeps all of
+ * that detail legible. Pass this as GoogleMap(mapColorScheme = ...).
+ */
+@Composable
+fun rememberThemedMapColorScheme(): ComposeMapColorScheme =
+    if (isDarkTheme) ComposeMapColorScheme.DARK else ComposeMapColorScheme.LIGHT
+
+/**
+ * Builds [MapProperties] for a map.
+ *
+ * Interactive maps get NO style JSON at all: the base map then shows every
+ * pedestrian path, walkway and sidewalk the Maps SDK has data for, and the
+ * dark look comes from [rememberThemedMapColorScheme] instead.
+ *
+ * [liteMode] maps (a static bitmap, e.g. Place Details) don't support the
+ * colour scheme, so only they still get the JSON night style in dark mode.
  *
  * Parsing the JSON allocates, so it's remembered against the theme flag and
  * only rebuilt when the theme actually changes.
  */
 @Composable
 fun rememberThemedMapProperties(
-    isMyLocationEnabled: Boolean = false
+    isMyLocationEnabled: Boolean = false,
+    liteMode: Boolean = false
 ): MapProperties {
 
     val dark = isDarkTheme
 
-    val style = remember(dark) {
-        if (dark) MapStyleOptions(NIGHT_STYLE_JSON) else null
+    val style = remember(dark, liteMode) {
+        if (dark && liteMode) MapStyleOptions(NIGHT_STYLE_JSON) else null
     }
 
     return MapProperties(

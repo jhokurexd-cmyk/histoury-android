@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -53,9 +54,8 @@ import com.histoury.app.theme.RatingStar
 /**
  * Compact horizontal-scroll card for Home's "Popular" row of top-rated
  * historical sites — full-bleed image with the title/location overlaid on
- * a gradient scrim, matching the reference design. The bookmark heart is a
- * lightweight local UI toggle only (Histoury has no saved-sites feature
- * yet), so it never touches Firestore or any existing state.
+ * a gradient scrim, matching the reference design. The heart is the real
+ * Favorites toggle ([SiteFavoriteButton]), shared with every other screen.
  */
 @Composable
 fun PopularSiteCard(
@@ -64,38 +64,11 @@ fun PopularSiteCard(
     rating: Double,
     imageUrl: String,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    siteDocumentId: String = "",
+    // "1.2 km" from the visitor, or null when their location isn't known.
+    distanceText: String? = null
 ) {
-
-    var isBookmarked by remember { mutableStateOf(false) }
-
-    // A one-shot pop on toggle, not a lingering size change: the heart
-    // grows past its resting size and springs back, confirming the tap
-    // changed something. Skipped on first composition so a screen full of
-    // cards doesn't pop in unison when it first appears.
-    val bookmarkScale = remember { Animatable(1f) }
-    var isFirstBookmarkComposition by remember { mutableStateOf(true) }
-
-    LaunchedEffect(isBookmarked) {
-        if (isFirstBookmarkComposition) {
-            isFirstBookmarkComposition = false
-        } else {
-            bookmarkScale.animateTo(
-                targetValue = 1.3f,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessHigh
-                )
-            )
-            bookmarkScale.animateTo(
-                targetValue = 1f,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessMedium
-                )
-            )
-        }
-    }
 
     val cardInteractionSource = remember { MutableInteractionSource() }
 
@@ -138,66 +111,39 @@ fun PopularSiteCard(
                 )
         )
 
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(10.dp),
-            shape = RoundedCornerShape(50),
-            color = CardSurface
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Star,
-                    contentDescription = null,
-                    tint = RatingStar,
-                    modifier = Modifier.size(12.dp)
-                )
-                Spacer(Modifier.width(3.dp))
-                Text(
-                    text = "%.1f".format(rating),
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextPrimary
-                )
-            }
-        }
-
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(10.dp)
-                .size(30.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.92f))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) {
-                    isBookmarked = !isBookmarked
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = if (isBookmarked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                contentDescription = "Bookmark",
-                tint = Primary,
+        // Same corner layout as the Recommended card: rating top-left,
+        // heart top-right, name + arrow on one bottom row.
+        // No badge until a site has been rated — "0.0" reads as a bad score.
+        if (rating > 0.0) {
+            RatingBadge(
+                rating = rating,
                 modifier = Modifier
-                    .size(16.dp)
-                    .scale(bookmarkScale.value)
+                    .align(Alignment.TopStart)
+                    .padding(OverlayControls.CardInset)
             )
         }
+
+        SiteFavoriteButton(
+            siteDocumentId = siteDocumentId,
+            siteName = title,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(OverlayControls.CardFavoritePadding)
+        )
 
         Row(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 14.dp, end = 52.dp, bottom = 14.dp),
-            verticalAlignment = Alignment.Bottom
+                .fillMaxWidth()
+                .padding(
+                    start = 14.dp,
+                    end = OverlayControls.CardInset,
+                    bottom = OverlayControls.CardInset
+                ),
+            verticalAlignment = Alignment.CenterVertically
         ) {
 
-            Column(modifier = Modifier.width(150.dp)) {
+            Column(modifier = Modifier.weight(1f)) {
 
                 Text(
                     text = title,
@@ -219,7 +165,10 @@ fun PopularSiteCard(
                     )
                     Spacer(Modifier.width(3.dp))
                     Text(
-                        text = location,
+                        text = listOfNotNull(
+                            distanceText?.let { if (it == "Nearby") it else "$it away" },
+                            location.takeIf { it.isNotBlank() }
+                        ).joinToString(" · "),
                         color = Color.White.copy(alpha = 0.9f),
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Normal,
@@ -228,23 +177,10 @@ fun PopularSiteCard(
                     )
                 }
             }
-        }
 
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(10.dp)
-                .size(32.dp)
-                .clip(CircleShape)
-                .background(Primary),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                contentDescription = "View site",
-                tint = Color.White,
-                modifier = Modifier.size(15.dp)
-            )
+            Spacer(Modifier.width(OverlayControls.ControlGap))
+
+            CardArrowBadge()
         }
     }
 }

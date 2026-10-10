@@ -18,7 +18,19 @@ object SuspensionInfoHolder {
         private set
 
     fun set(info: AccountStatus.Suspended) {
-        current = info
+        // Two detectors can race (MainActivity's live listener and
+        // LoginViewModel): whichever signs out second can't read a token
+        // anymore, so don't let it wipe the one the first one captured.
+        val previous = current
+        current = if (
+            info.appealToken == null &&
+            previous?.uid == info.uid &&
+            previous.appealToken != null
+        ) {
+            info.copy(appealToken = previous.appealToken)
+        } else {
+            info
+        }
     }
 
     fun clear() {

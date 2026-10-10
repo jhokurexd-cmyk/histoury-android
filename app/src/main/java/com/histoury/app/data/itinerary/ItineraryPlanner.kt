@@ -332,6 +332,16 @@ object ItineraryPlanner {
         return route
     }
 
+    /**
+     * Straight-line length of walking [stops] in order from the start point.
+     * Used to tell the visitor how much "Optimize Order" actually saved.
+     */
+    fun estimatePathMeters(
+        startLatitude: Double,
+        startLongitude: Double,
+        stops: List<ItineraryStop>
+    ): Double = pathLength(startLatitude, startLongitude, stops) * WALKING_DETOUR_FACTOR
+
     private fun pathLength(
         startLatitude: Double,
         startLongitude: Double,

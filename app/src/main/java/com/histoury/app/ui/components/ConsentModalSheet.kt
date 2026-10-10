@@ -53,13 +53,16 @@ import com.histoury.app.ui.screens.legal.LegalContent
  * switcher instead of two separate screens, so reading either (or both)
  * only takes one open/close.
  *
- * [onDismiss] fires for every way this can close — the "Got it" button,
- * the X, tapping the scrim, or swiping the sheet down — since opening it
- * at all is the acknowledgment this is gating.
+ * [onAgree] fires only from the "I Agree" button — that is the consent.
+ * [onDismiss] covers every other way out (the X, tapping the scrim,
+ * swiping down) and records nothing.
  */
 @Composable
 fun ConsentModalSheet(
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    // The explicit agreement. Defaults to [onDismiss] for any caller that
+    // only shows the documents for reading.
+    onAgree: () -> Unit = onDismiss
 ) {
 
     val sheetState = rememberModalBottomSheetState(
@@ -225,8 +228,8 @@ fun ConsentModalSheet(
                     .padding(top = 8.dp, bottom = 24.dp)
             ) {
                 PrimaryButton(
-                    text = "Got It, Continue",
-                    onClick = onDismiss
+                    text = "I Agree",
+                    onClick = onAgree
                 )
             }
         }

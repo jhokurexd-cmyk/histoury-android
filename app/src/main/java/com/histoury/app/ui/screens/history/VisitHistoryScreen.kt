@@ -1,5 +1,8 @@
 package com.histoury.app.ui.screens.history
 
+import com.histoury.app.ui.tutorial.TutorialStep
+import com.histoury.app.ui.tutorial.TutorialTour
+import com.histoury.app.navigation.navigateSafely
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -14,6 +17,7 @@ import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -30,7 +34,10 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.layout.Column
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -62,9 +69,36 @@ fun VisitHistoryScreen(
 
     val uiState by visitHistoryViewModel.uiState.collectAsState()
 
-    LaunchedEffect(Unit) {
-        visitHistoryViewModel.loadVisitHistory()
+    // Refresh every time the screen comes (back) into view — returning from
+    // a site, from AR, or from another tab. The ViewModel also loads on its
+    // own when Firebase Auth restores the session and when a visit is
+    // recorded anywhere in the app.
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                visitHistoryViewModel.loadVisitHistory()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+
+    TutorialTour(
+        id = "visit_history",
+        steps = listOf(
+            TutorialStep(
+                target = null,
+                title = "Your Visit History",
+                body = "Every site you've been to shows up here once you arrive, and its full story stays unlocked for you."
+            ),
+            TutorialStep(
+                target = null,
+                title = "Yet to Explore",
+                body = "Further down are the sites you haven't visited. Tap Visit on one to get directions there."
+            )
+        )
+    )
 
     BottomNavScaffold(
         navController = navController,
@@ -90,34 +124,13 @@ fun VisitHistoryScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
 
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .shadow(elevation = 2.dp, shape = CircleShape)
-                            .clip(CircleShape)
-                            .background(CardSurface)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null
-                            ) {
-                                navController.popBackStack()
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = Primary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-
-                    Spacer(Modifier.width(14.dp))
-
+                    // Top-level tab: no back arrow (Back already returns to
+                    // Home), same header as the other tabs — title on the
+                    // left, menu on the right.
                     Text(
                         text = "Visit History",
                         color = TextPrimary,
-                        fontSize = 19.sp,
+                        fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.weight(1f)
                     )
@@ -132,7 +145,7 @@ fun VisitHistoryScreen(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
                             ) {
-                                navController.navigate(Routes.Menu.route)
+                                navController.navigateSafely(Routes.Menu.route)
                             },
                         contentAlignment = Alignment.Center
                     ) {
@@ -169,7 +182,11 @@ fun VisitHistoryScreen(
 
                         Column {
                             Text(
-                                text = uiState.visitedEntries.size.toString(),
+                                text = if (uiState.refreshFailed && uiState.visitedEntries.isEmpty()) {
+                                    "\u2014"
+                                } else {
+                                    uiState.visitedEntries.size.toString()
+                                },
                                 color = TextPrimary,
                                 fontSize = 20.sp,
                                 fontWeight = FontWeight.Bold
@@ -217,7 +234,23 @@ fun VisitHistoryScreen(
                         )
                     }
 
-                    if (uiState.visitedEntries.isEmpty()) {
+                    if (uiState.visitedEntries.isEmpty() && uiState.refreshFailed) {
+                        // Couldn't load — not the same as "nothing visited".
+                        item {
+                            Column {
+                                Text(
+                                    text = "Couldn't load your visit history. Check your connection and try again.",
+                                    color = TextSecondary,
+                                    fontSize = 13.sp
+                                )
+                                androidx.compose.material3.TextButton(
+                                    onClick = { visitHistoryViewModel.loadVisitHistory() }
+                                ) {
+                                    Text("Try Again", color = Primary, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    } else if (uiState.visitedEntries.isEmpty()) {
                         item {
                             Text(
                                 text = "No sites visited yet. Head out and explore!",
@@ -229,8 +262,14 @@ fun VisitHistoryScreen(
                         items(uiState.visitedEntries) { entry ->
                             VisitedSiteRow(
                                 entry = entry,
+                                // A visited site is unlocked: open its info page.
+                                onOpenClick = {
+                                    navController.navigateSafely(
+                                        Routes.SiteDetails.createRoute(entry.site.documentId, showAr = false)
+                                    )
+                                },
                                 onLeaveReviewClick = {
-                                    navController.navigate(
+                                    navController.navigateSafely(
                                         Routes.Review.createRoute(
                                             entry.site.documentId,
                                             entry.visit.id
@@ -241,34 +280,43 @@ fun VisitHistoryScreen(
                         }
                     }
 
-                    item {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = "Yet to Explore",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
-                        )
-                    }
+                    // After a failed load there's nothing to compare against,
+                    // so "Yet to Explore" would wrongly claim everything has
+                    // been explored.
+                    val loadFailedWithNothing = uiState.refreshFailed &&
+                        uiState.visitedEntries.isEmpty() &&
+                        uiState.yetToExploreSites.isEmpty()
 
-                    if (uiState.yetToExploreSites.isEmpty()) {
+                    if (!loadFailedWithNothing) {
                         item {
+                            Spacer(Modifier.height(8.dp))
                             Text(
-                                text = "You've explored everything published so far!",
-                                color = TextSecondary,
-                                fontSize = 13.sp
+                                text = "Yet to Explore",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
                             )
                         }
-                    } else {
-                        items(uiState.yetToExploreSites) { site ->
-                            YetToExploreRow(
-                                site = site,
-                                onVisitClick = {
-                                    navController.navigate(
-                                        Routes.Map.createRoute(site.documentId)
-                                    )
-                                }
-                            )
+
+                        if (uiState.yetToExploreSites.isEmpty()) {
+                            item {
+                                Text(
+                                    text = "You've explored everything published so far!",
+                                    color = TextSecondary,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        } else {
+                            items(uiState.yetToExploreSites) { site ->
+                                YetToExploreRow(
+                                    site = site,
+                                    onVisitClick = {
+                                        navController.navigateSafely(
+                                            Routes.Map.createRoute(site.documentId)
+                                        )
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -280,10 +328,12 @@ fun VisitHistoryScreen(
 @Composable
 private fun VisitedSiteRow(
     entry: VisitedSiteEntry,
+    onOpenClick: () -> Unit,
     onLeaveReviewClick: () -> Unit
 ) {
 
     Surface(
+        onClick = onOpenClick,
         shape = RoundedCornerShape(20.dp),
         color = CardSurface,
         shadowElevation = 3.dp,
@@ -370,7 +420,7 @@ private fun VisitedSiteRow(
                         }
                     }
 
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(6.dp))
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
@@ -387,6 +437,8 @@ private fun VisitedSiteRow(
                         )
                     }
 
+                    Spacer(Modifier.height(3.dp))
+
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             Icons.Default.LocationOn,
@@ -398,38 +450,71 @@ private fun VisitedSiteRow(
                         Text(
                             text = entry.site.location,
                             color = TextSecondary,
-                            fontSize = 11.sp
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
 
-                    if (!entry.visit.reviewSubmitted) {
+                    // Both review states share one slot, one pill shape and
+                    // one type style, so a card doesn't shift between them.
+                    Spacer(Modifier.height(10.dp))
 
-                        Spacer(Modifier.height(4.dp))
-
-                        Text(
-                            text = "Leave a Review \u2192",
-                            color = Primary,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = onLeaveReviewClick
-                            )
-                        )
-                    } else {
-
-                        Spacer(Modifier.height(4.dp))
-
-                        Text(
-                            text = "Review submitted",
-                            color = TextSecondary,
-                            fontSize = 12.sp
-                        )
-                    }
+                    ReviewStatusPill(
+                        reviewSubmitted = entry.visit.reviewSubmitted,
+                        onLeaveReviewClick = onLeaveReviewClick
+                    )
                 }
             }
         }
+    }
+}
+
+/**
+ * The review state of a visited site, always in the same place and shape:
+ * a quiet green "Review submitted" status, or a coral "Leave a Review" action.
+ */
+@Composable
+private fun ReviewStatusPill(
+    reviewSubmitted: Boolean,
+    onLeaveReviewClick: () -> Unit
+) {
+
+    val shape = RoundedCornerShape(50)
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(shape)
+            .background(if (reviewSubmitted) SuccessSurface else PrimarySoft)
+            .then(
+                if (reviewSubmitted) {
+                    Modifier
+                } else {
+                    Modifier.clickable(
+                        onClickLabel = "Leave a review",
+                        role = Role.Button,
+                        onClick = onLeaveReviewClick
+                    )
+                }
+            )
+            .padding(horizontal = 10.dp, vertical = 5.dp)
+    ) {
+        Icon(
+            imageVector = if (reviewSubmitted) Icons.Default.CheckCircle else Icons.Default.RateReview,
+            contentDescription = null,
+            tint = if (reviewSubmitted) Success else Primary,
+            modifier = Modifier.size(13.dp)
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            text = if (reviewSubmitted) "Review submitted" else "Leave a Review \u2192",
+            color = if (reviewSubmitted) Success else Primary,
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1
+        )
     }
 }
 

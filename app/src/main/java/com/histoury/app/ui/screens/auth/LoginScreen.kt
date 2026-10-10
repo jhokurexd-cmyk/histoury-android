@@ -1,5 +1,6 @@
 package com.histoury.app.ui.screens.auth
 
+import com.histoury.app.navigation.navigateSafely
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -13,10 +14,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -26,13 +28,14 @@ import com.histoury.app.data.repository.SuspensionInfoHolder
 import com.histoury.app.data.viewmodel.LoginViewModel
 import com.histoury.app.navigation.Routes
 import com.histoury.app.theme.Primary
-import com.histoury.app.theme.PrimarySoft
-import com.histoury.app.theme.SurfaceSoft
 import com.histoury.app.theme.TextPrimary
 import com.histoury.app.theme.TextSecondary
+import com.histoury.app.ui.components.AuthBackdrop
 import com.histoury.app.ui.components.AuthStatusBanner
 import com.histoury.app.ui.components.AuthTextField
 import com.histoury.app.ui.components.PrimaryButton
+import com.histoury.app.util.Validators
+import com.histoury.app.util.rememberFormState
 
 @Composable
 fun LoginScreen(
@@ -42,10 +45,22 @@ fun LoginScreen(
 
     val uiState by loginViewModel.uiState.collectAsState()
 
+    // Live validation (shared rules): shown once a field is typed in or
+    // left, and for every field when Log in is pressed.
+    val form = rememberFormState()
+    val emailError = Validators.email(uiState.email)
+    val passwordError = Validators.loginPassword(uiState.password)
+    fun submit() {
+        if (form.submit(emailError, passwordError)) loginViewModel.login()
+    }
+
     LaunchedEffect(uiState.loginSucceeded) {
         if (uiState.loginSucceeded) {
-            navController.navigate(Routes.Home.route) {
-                popUpTo(Routes.AuthGate.route) {
+            // Clear everything under Home. popUpTo(AuthGate) did nothing here
+            // (AuthGate is already gone by now), which left Onboarding/Login
+            // underneath — so Back on Home returned to the Login screen.
+            navController.navigateSafely(Routes.Home.route) {
+                popUpTo(navController.graph.id) {
                     inclusive = true
                 }
             }
@@ -62,35 +77,28 @@ fun LoginScreen(
             // re-fire this effect and bounce the user straight back to
             // the Suspended screen even after being unsuspended.
             loginViewModel.suspensionShown()
-            navController.navigate(Routes.Suspended.route)
+            navController.navigateSafely(Routes.Suspended.route)
         }
     }
+
+    AuthBackdrop {
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                // A single coral wash bleeding down from the top, rather
-                // than a flat field. It ties the screen to the splash that
-                // precedes it — which is pure coral — so arriving here reads
-                // as the colour receding rather than as a hard cut to grey.
-                Brush.verticalGradient(
-                    colorStops = arrayOf(
-                        0f to PrimarySoft,
-                        0.42f to SurfaceSoft,
-                        1f to SurfaceSoft
-                    )
-                )
-            )
-            .verticalScroll(rememberScrollState())
+            // Insets outside the scroll so the logo never slides under the
+            // status bar; nav bar + keyboard keep the button reachable.
+            .statusBarsPadding()
+            .navigationBarsPadding()
             // Lifts the form clear of the keyboard. Without it the password
             // field and the Login button sit underneath it on a short
             // screen, and the only way out is to dismiss the keyboard first.
             .imePadding()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 28.dp)
     ) {
 
-        Spacer(Modifier.height(36.dp))
+        Spacer(Modifier.height(28.dp))
 
         Image(
             painter = painterResource(R.drawable.logo_histoury),
@@ -127,43 +135,58 @@ fun LoginScreen(
 
         AuthTextField(
             value = uiState.email,
-            onValueChange = { loginViewModel.onEmailChange(it) },
+            onValueChange = {
+                loginViewModel.onEmailChange(it)
+                form.touch("email")
+            },
             label = "Email",
             leadingIcon = Icons.Default.Email,
-            enabled = !uiState.isLoading
+            keyboardType = KeyboardType.Email,
+            enabled = !uiState.isLoading,
+            error = form.shown("email", emailError),
+            onFocusLost = { form.touch("email") }
         )
 
         Spacer(Modifier.height(14.dp))
 
         AuthTextField(
             value = uiState.password,
-            onValueChange = { loginViewModel.onPasswordChange(it) },
+            onValueChange = {
+                loginViewModel.onPasswordChange(it)
+                form.touch("password")
+            },
             label = "Password",
             leadingIcon = Icons.Default.Lock,
             isPassword = true,
-            enabled = !uiState.isLoading
+            enabled = !uiState.isLoading,
+            imeAction = ImeAction.Done,
+            onImeAction = { submit() },
+            error = form.shown("password", passwordError),
+            onFocusLost = { form.touch("password") }
         )
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(2.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End
         ) {
-            Text(
-                text = "Forgot Password?",
-                color = Primary,
-                fontWeight = FontWeight.Bold,
-                fontSize = 13.sp,
-                modifier = Modifier.clickable(enabled = !uiState.isLoading) {
-                    navController.navigate(Routes.ForgotPassword.route)
-                }
-            )
+            TextButton(
+                onClick = { navController.navigateSafely(Routes.ForgotPassword.route) { launchSingleTop = true } },
+                enabled = !uiState.isLoading
+            ) {
+                Text(
+                    text = "Forgot Password?",
+                    color = Primary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.5.sp
+                )
+            }
         }
 
         if (uiState.errorMessage != null) {
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(6.dp))
 
             AuthStatusBanner(
                 message = uiState.errorMessage ?: "",
@@ -171,44 +194,46 @@ fun LoginScreen(
             )
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(18.dp))
 
         PrimaryButton(
             text = if (uiState.cooldownSeconds > 0) {
                 "Try again in ${uiState.cooldownSeconds}s"
             } else {
-                "Login"
+                "Log in"
             },
             enabled = uiState.cooldownSeconds == 0,
             isLoading = uiState.isLoading,
             onClick = {
-                loginViewModel.login()
+                submit()
             }
         )
 
         Spacer(Modifier.height(24.dp))
 
-        Row(
+        // Whole line is the tap target (48dp), not just the word.
+        TextButton(
+            onClick = {
+                // Single top: a double tap mustn't stack two Register screens.
+                navController.navigateSafely(Routes.Register.route) { launchSingleTop = true }
+            },
+            enabled = !uiState.isLoading,
             modifier = Modifier.align(Alignment.CenterHorizontally)
         ) {
-
             Text(
                 text = "Don't have an account? ",
                 color = TextSecondary,
-                fontSize = 13.5.sp
+                fontSize = 14.sp
             )
-
             Text(
                 text = "Register",
                 color = Primary,
                 fontWeight = FontWeight.Bold,
-                fontSize = 13.5.sp,
-                modifier = Modifier.clickable {
-                    navController.navigate(Routes.Register.route)
-                }
+                fontSize = 14.sp
             )
         }
 
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(24.dp))
+    }
     }
 }

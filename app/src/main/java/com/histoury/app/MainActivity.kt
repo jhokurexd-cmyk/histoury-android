@@ -1,7 +1,12 @@
 package com.histoury.app
 
+import android.app.PictureInPictureParams
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.os.Build
 import android.os.Bundle
+import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -17,10 +22,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.navigation.compose.rememberNavController
 import com.google.firebase.auth.FirebaseAuth
 import com.histoury.app.data.offline.OfflineContentCache
+import com.histoury.app.data.offline.OfflineSiteManager
 import com.histoury.app.data.repository.AccountStatus
 import com.histoury.app.data.repository.AuthRepository
 import com.histoury.app.data.repository.SuspensionInfoHolder
 import com.histoury.app.location.ArrivalEventBus
+import com.histoury.app.location.SessionCleanup
 import com.histoury.app.navigation.NavGraph
 import com.histoury.app.navigation.Routes
 import androidx.core.view.WindowCompat
@@ -28,6 +35,7 @@ import com.histoury.app.theme.Background
 import com.histoury.app.theme.HistouryTheme
 import com.histoury.app.theme.ThemePreference
 import com.histoury.app.theme.isDarkTheme
+import com.histoury.app.util.NavigationPipState
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flatMapLatest
@@ -64,7 +72,13 @@ class MainActivity : ComponentActivity() {
         // a stored dark preference loads. It's one string off disk.
         ThemePreference.load(applicationContext)
 
-        pendingArrivalSiteId = intent?.getStringExtra(EXTRA_ARRIVAL_SITE_ID)
+        // Only on a FRESH launch. When the activity is recreated (dark mode
+        // or another configuration change) Android hands it the same launch
+        // intent again, and reading the extra again re-opened the Arrival
+        // screen from a notification tapped long ago.
+        if (savedInstanceState == null) {
+            pendingArrivalSiteId = consumeArrivalExtra(intent)
+        }
 
         // Fills the Firestore and image caches in the background so site
         // text and photos stay readable after the signal drops. No-ops when
@@ -72,6 +86,38 @@ class MainActivity : ComponentActivity() {
         // this is cheap to call on every launch.
         lifecycleScope.launch {
             OfflineContentCache.warmUp(applicationContext)
+        }
+
+        // Offline Downloads: continue downloads that were queued, waiting or
+        // paused when the app was last closed, and look for newer versions
+        // of downloaded AR resources (queued only if automatic updates are
+        // on; each waits for the allowed connection by itself).
+        OfflineSiteManager.restore(applicationContext)
+        // "Auto-download on Wi-Fi": saves missing AR sites whenever on Wi-Fi.
+        com.histoury.app.data.offline.AutoDownloader.start(applicationContext)
+        // Each time the phone is online (now, and whenever it comes back):
+        // remove sites taken down in the admin panel, then look for updates.
+        OfflineSiteManager.startMaintenance(applicationContext)
+        lifecycleScope.launch {
+            OfflineSiteManager.retired.collect { names ->
+                val what = if (names.size == 1) names.first() else "${names.size} sites"
+                android.widget.Toast.makeText(
+                    applicationContext,
+                    "$what removed from Offline Downloads — no longer available in Histoury.",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+
+        // Android 12+: let the system shrink the app into the floating mini
+        // map by itself when the visitor leaves mid-navigation (Home,
+        // gesture, recents) — smoother than doing it from onUserLeaveHint.
+        lifecycleScope.launch {
+            NavigationPipState.isNavigating.collect {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && supportsNavigationPip()) {
+                    setPictureInPictureParams(navigationPipParams())
+                }
+            }
         }
 
         setContent {
@@ -109,11 +155,17 @@ class MainActivity : ComponentActivity() {
 
                         if (siteId != null) {
 
-                            navController.navigate(
-                                Routes.Arrival.createRoute(siteId)
-                            )
-
                             pendingArrivalSiteId = null
+
+                            // A notification from a session that has since
+                            // ended (logout/suspension) opens the app
+                            // normally instead of an Arrival screen with no
+                            // one signed in.
+                            if (FirebaseAuth.getInstance().currentUser != null) {
+                                navController.navigate(
+                                    Routes.Arrival.createRoute(siteId)
+                                )
+                            }
                         }
                     }
 
@@ -149,7 +201,9 @@ class MainActivity : ComponentActivity() {
                                 navController.currentDestination?.route in
                                     ARRIVAL_INTERRUPTIBLE_ROUTES
 
-                            if (isVisible && !alreadyOnArrival && onInterruptibleScreen) {
+                            val signedIn = FirebaseAuth.getInstance().currentUser != null
+
+                            if (signedIn && isVisible && !alreadyOnArrival && onInterruptibleScreen) {
                                 navController.navigate(
                                     Routes.Arrival.createRoute(siteId)
                                 ) {
@@ -165,6 +219,25 @@ class MainActivity : ComponentActivity() {
                     // blocking Suspended screen — don't make them wait for
                     // a restart to find out. Restarts the listener whenever
                     // Firebase's own auth state changes (login/logout).
+                    // Whenever the session ends — however it ends — stop
+                    // arrival geofences, notifications and navigation that
+                    // belonged to it (see SessionCleanup).
+                    LaunchedEffect(Unit) {
+                        var hadUser = false
+                        AuthRepository().authStateUidFlow().collect { uid ->
+                            if (uid == null && hadUser) {
+                                SessionCleanup.onSignedOut(applicationContext)
+                            }
+                            // Signed in (again): saved downloads stay on the
+                            // phone across accounts; check them against the
+                            // server now rather than at the next launch.
+                            if (uid != null && !hadUser) {
+                                OfflineSiteManager.refreshNow(applicationContext)
+                            }
+                            hadUser = uid != null
+                        }
+                    }
+
                     LaunchedEffect(Unit) {
 
                         val authRepository = AuthRepository()
@@ -181,8 +254,13 @@ class MainActivity : ComponentActivity() {
 
                                 if (status is AccountStatus.Suspended) {
 
+                                    // Keep a token for the appeal before
+                                    // signing out — afterwards there's no
+                                    // current user to read one from.
+                                    val appealToken = authRepository.appealTokenOrNull()
+                                    com.histoury.app.data.itinerary.ActiveItineraryTrip.clear()
                                     FirebaseAuth.getInstance().signOut()
-                                    SuspensionInfoHolder.set(status)
+                                    SuspensionInfoHolder.set(status.copy(appealToken = appealToken))
 
                                     val alreadyOnSuspended =
                                         navController.currentDestination?.route ==
@@ -196,14 +274,146 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 }
+
+                                // The server says the profile is gone (an
+                                // admin deleted the account): end the session
+                                // instead of leaving it signed in until the
+                                // token expires. Login already handles its own
+                                // NoProfile case, so don't reset that screen.
+                                if (status is AccountStatus.NoProfile) {
+
+                                    com.histoury.app.data.itinerary.ActiveItineraryTrip.clear()
+                                    FirebaseAuth.getInstance().signOut()
+
+                                    val alreadyOnLogin =
+                                        navController.currentDestination?.route ==
+                                            Routes.Login.route
+
+                                    if (!alreadyOnLogin) {
+                                        navController.navigate(Routes.Login.route) {
+                                            popUpTo(0) {
+                                                inclusive = true
+                                            }
+                                        }
+                                    }
+                                }
                             }
                     }
 
-                    NavGraph(
-                        navController = navController
-                    )
+                    androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxSize()) {
+
+                        // Tab screens leave the bottom bar to the single
+                        // shared one below, so it stays put while switching.
+                        androidx.compose.runtime.CompositionLocalProvider(
+                            com.histoury.app.ui.components.LocalSharedNavBar provides true
+                        ) {
+                            NavGraph(
+                                navController = navController
+                            )
+                        }
+
+                        val isInPip by NavigationPipState.isInPip.collectAsState()
+
+                        if (!isInPip) {
+                            com.histoury.app.ui.components.SharedBottomNavBar(
+                                navController = navController,
+                                modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter)
+                            )
+
+                            // "You're offline" / "Back online", over every
+                            // screen (not in the tiny floating map).
+                            com.histoury.app.ui.components.ConnectivityBanner(
+                                modifier = Modifier.align(androidx.compose.ui.Alignment.TopCenter)
+                            )
+
+                            // "Prepare for your trip" after an itinerary is created.
+                            com.histoury.app.ui.components.TripPrepPrompt()
+
+                            // Quick loading line on each page change.
+                            com.histoury.app.ui.components.NavLoadingIndicator(
+                                navController = navController,
+                                modifier = Modifier.align(androidx.compose.ui.Alignment.TopCenter)
+                            )
+                        }
+
+                        // First-run spotlight tutorials, drawn over every
+                        // screen and the bottom bar. Last, so it's on top.
+                        if (!isInPip) {
+                            com.histoury.app.ui.tutorial.TutorialOverlay()
+                        }
+
+                    }
                 }
             }
+        }
+    }
+
+    // ----- floating mini map (picture-in-picture) during navigation -----
+
+    fun supportsNavigationPip(): Boolean =
+        packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+    private fun navigationPipParams(): PictureInPictureParams {
+        val builder = PictureInPictureParams.Builder()
+            // Portrait-ish: a navigation map reads better tall than wide.
+            .setAspectRatio(Rational(3, 4))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setAutoEnterEnabled(NavigationPipState.isNavigating.value)
+            // A map isn't video — a crossfade resize looks better than stretching.
+            builder.setSeamlessResizeEnabled(false)
+        }
+        return builder.build()
+    }
+
+    /** Shrinks the app into the floating mini map. Returns false if the device doesn't allow it. */
+    fun enterNavigationPip(): Boolean {
+        if (!supportsNavigationPip()) return false
+        return try {
+            enterPictureInPictureMode(navigationPipParams())
+        } catch (e: IllegalStateException) {
+            // PiP disabled for this app in system settings.
+            false
+        }
+    }
+
+    /** Brings the app back to full screen from the floating window (e.g. on arrival). */
+    fun expandFromPip() {
+        if (isInPictureInPictureMode) {
+            startActivity(
+                Intent(this, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            )
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Location or notification permission may have changed in Settings
+        // while away; re-check the "Location is off" notification.
+        com.histoury.app.location.LocationStatusNotifier.refresh(this)
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        // Android 8-11 have no auto-enter, so do it by hand when the visitor
+        // presses Home while navigating.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && NavigationPipState.isNavigating.value) {
+            enterNavigationPip()
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+
+        NavigationPipState.isInPip.value = isInPictureInPictureMode
+
+        // Leaving PiP while the activity is only CREATED means the visitor
+        // closed the window (X), not expanded it back to full screen.
+        if (!isInPictureInPictureMode && lifecycle.currentState == Lifecycle.State.CREATED) {
+            NavigationPipState.notifyPipDismissed()
         }
     }
 
@@ -212,7 +422,14 @@ class MainActivity : ComponentActivity() {
 
         setIntent(intent)
 
-        pendingArrivalSiteId = intent.getStringExtra(EXTRA_ARRIVAL_SITE_ID)
+        pendingArrivalSiteId = consumeArrivalExtra(intent)
+    }
+
+    /** Reads the arrival extra once and removes it, so nothing can re-read it later. */
+    private fun consumeArrivalExtra(intent: Intent?): String? {
+        val siteId = intent?.getStringExtra(EXTRA_ARRIVAL_SITE_ID)
+        intent?.removeExtra(EXTRA_ARRIVAL_SITE_ID)
+        return siteId
     }
 
     companion object {

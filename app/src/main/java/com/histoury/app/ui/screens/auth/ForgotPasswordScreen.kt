@@ -1,5 +1,7 @@
 package com.histoury.app.ui.screens.auth
 
+import com.histoury.app.navigation.safePopBackStack
+import com.histoury.app.navigation.navigateSafely
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -24,6 +26,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import com.histoury.app.util.Validators
+import com.histoury.app.util.rememberFormState
 import com.histoury.app.data.viewmodel.ForgotPasswordViewModel
 import com.histoury.app.navigation.Routes
 import com.histoury.app.theme.CardSurface
@@ -48,10 +52,17 @@ fun ForgotPasswordScreen(
 
     val uiState by forgotPasswordViewModel.uiState.collectAsState()
 
+    // Live validation with the shared email rule.
+    val form = rememberFormState()
+    val emailError = Validators.email(uiState.email)
+    fun submit() {
+        if (form.submit(emailError)) forgotPasswordViewModel.sendCode()
+    }
+
     LaunchedEffect(uiState.codeSent) {
         if (uiState.codeSent) {
             forgotPasswordViewModel.codeSentShown()
-            navController.navigate(Routes.OtpVerification.route)
+            navController.navigateSafely(Routes.OtpVerification.route)
         }
     }
 
@@ -63,6 +74,7 @@ fun ForgotPasswordScreen(
             // verticalScroll scrolls away with the content and the header
             // slides back under the cutout.
             .statusBarsPadding()
+            .imePadding()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 28.dp)
     ) {
@@ -80,7 +92,7 @@ fun ForgotPasswordScreen(
                     indication = null,
                     enabled = !uiState.isLoading
                 ) {
-                    navController.popBackStack()
+                    navController.safePopBackStack()
                 },
             contentAlignment = Alignment.Center
         ) {
@@ -136,11 +148,18 @@ fun ForgotPasswordScreen(
 
         AuthTextField(
             value = uiState.email,
-            onValueChange = { forgotPasswordViewModel.onEmailChange(it) },
+            onValueChange = {
+                forgotPasswordViewModel.onEmailChange(it)
+                form.touch("email")
+            },
             label = "Email",
             leadingIcon = Icons.Default.Mail,
             keyboardType = KeyboardType.Email,
-            enabled = !uiState.isLoading
+            enabled = !uiState.isLoading,
+            imeAction = androidx.compose.ui.text.input.ImeAction.Done,
+            onImeAction = { submit() },
+            error = form.shown("email", emailError),
+            onFocusLost = { form.touch("email") }
         )
 
         if (uiState.errorMessage != null) {
@@ -158,7 +177,7 @@ fun ForgotPasswordScreen(
         PrimaryButton(
             text = "Send Code",
             isLoading = uiState.isLoading,
-            onClick = { forgotPasswordViewModel.sendCode() }
+            onClick = { submit() }
         )
 
         Spacer(Modifier.height(20.dp))
@@ -171,7 +190,7 @@ fun ForgotPasswordScreen(
             modifier = Modifier
                 .align(Alignment.CenterHorizontally)
                 .clickable(enabled = !uiState.isLoading) {
-                    navController.popBackStack()
+                    navController.safePopBackStack()
                 }
         )
 

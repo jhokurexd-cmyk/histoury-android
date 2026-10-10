@@ -2,6 +2,8 @@
 
 package com.histoury.app.ui.screens.sitelibrary
 
+import com.histoury.app.navigation.safePopBackStack
+import com.histoury.app.navigation.navigateSafely
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -118,7 +120,7 @@ fun SiteLibraryScreen(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
                         ) {
-                            navController.popBackStack()
+                            navController.safePopBackStack()
                         },
                     contentAlignment = Alignment.Center
                 ) {
@@ -197,7 +199,7 @@ fun SiteLibraryScreen(
                     entry = entry,
                     onClick = {
                         if (entry.isUnlocked) {
-                            navController.navigate(
+                            navController.navigateSafely(
                                 Routes.SiteDetails.createRoute(
                                     siteId = entry.site.documentId,
                                     showAr = false

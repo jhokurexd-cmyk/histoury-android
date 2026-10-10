@@ -1,5 +1,6 @@
 package com.histoury.app.ui.screens.support
 
+import com.histoury.app.navigation.safePopBackStack
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
@@ -48,6 +49,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
+import com.histoury.app.ui.components.CharacterCounter
+import com.histoury.app.ui.components.FieldErrorText
+import com.histoury.app.util.Validators
+import com.histoury.app.util.rememberFormState
 import com.histoury.app.data.viewmodel.SupportViewModel
 import com.histoury.app.theme.Outline
 import com.histoury.app.theme.CardSurface
@@ -66,27 +71,79 @@ private data class QuickHelpItem(
     val answer: String
 )
 
+// Kept in step with the app as it is now. When a feature changes, update
+// the answer here too: an FAQ describing a button that no longer exists is
+// worse than no FAQ.
 private val quickHelpItems = listOf(
     QuickHelpItem(
-        title = "How to use AR features?",
-        subtitle = "Learn about augmented reality experiences",
-        answer = "Once you've arrived at a historical site, open its details " +
-            "page and tap \"Travel Back in Time (AR)\". Point your camera at " +
-            "the site to see the historical overlay."
+        title = "How do I plan an itinerary?",
+        subtitle = "Build a route around the sites you want",
+        answer = "Tap the centre button in the bottom bar, then +. Pick your " +
+            "historical sites, choose interests for nearby recommendations " +
+            "(optional), and Histoury builds a walking route. Back takes you " +
+            "one step at a time without losing your picks."
     ),
     QuickHelpItem(
-        title = "Navigation not working?",
-        subtitle = "Troubleshoot location services",
-        answer = "Make sure location permission is set to \"Allow all the " +
-            "time\" in your phone's Settings for Histoury, and that GPS is " +
-            "turned on."
+        title = "Can I change the order of stops?",
+        subtitle = "Reorder, add or remove stops",
+        answer = "On the route screen, press and hold a stop (or drag its " +
+            "handle) to move it, or tap its remove button to drop it. " +
+            "Tap Save to keep your changes."
     ),
     QuickHelpItem(
-        title = "Can't save photos?",
-        subtitle = "Check storage permissions",
-        answer = "Histoury needs storage/photos permission to save pictures " +
-            "you capture. Check your phone's Settings > Apps > Histoury > " +
-            "Permissions."
+        title = "How does navigation work?",
+        subtitle = "Turn-by-turn directions to each stop",
+        answer = "Tap \"Start Trip Now\" to get directions to your first stop. When " +
+            "you arrive, Histoury opens that site automatically. If you leave " +
+            "the app mid-trip the map keeps going in a small floating window."
+    ),
+    QuickHelpItem(
+        title = "Why is a site locked?",
+        subtitle = "Unlocking site information and AR",
+        answer = "Full site stories and the AR experience unlock once you've " +
+            "visited the site in person. After that, you can reread them any " +
+            "time from Menu > Site Information."
+    ),
+    QuickHelpItem(
+        title = "How do I use the AR experience?",
+        subtitle = "See the site as it once was",
+        answer = "At the site, tap \"Travel Back in Time (AR)\" and slowly " +
+            "point your camera at the site until the model appears. Good " +
+            "daylight and a clear view help it lock on."
+    ),
+    QuickHelpItem(
+        title = "Can I use Histoury offline?",
+        subtitle = "Downloads for weak signal",
+        answer = "Go to Menu > Offline Downloads and download a site before " +
+            "you go. Its AR model and narration are then saved on your phone. " +
+            "Maps, directions and reviews still need a connection."
+    ),
+    QuickHelpItem(
+        title = "Where are my photos?",
+        subtitle = "Gallery and saving to your phone",
+        answer = "Photos you take in AR appear in the Gallery tab. Tap " +
+            "Download on a photo to save a copy to your phone's Pictures/" +
+            "Histoury folder."
+    ),
+    QuickHelpItem(
+        title = "How do I leave or rate reviews?",
+        subtitle = "Reviews, helpful votes and reports",
+        answer = "After visiting a site, open Visit History and tap \"Leave a " +
+            "Review\". In Site Rankings you can mark reviews as helpful or " +
+            "report ones that break the rules."
+    ),
+    QuickHelpItem(
+        title = "Navigation or arrival not working?",
+        subtitle = "Check location settings",
+        answer = "Turn on GPS and set Histoury's location permission to " +
+            "\"Allow all the time\" so arrivals are detected while your phone " +
+            "is in your pocket. Allow notifications too."
+    ),
+    QuickHelpItem(
+        title = "Can I use dark mode?",
+        subtitle = "Change how Histoury looks",
+        answer = "Yes. Go to Menu > Appearance and choose Light, Dark or " +
+            "your phone's setting."
     )
 )
 
@@ -97,6 +154,8 @@ fun SupportScreen(
 ) {
 
     val uiState by supportViewModel.uiState.collectAsState()
+
+    val feedbackForm = rememberFormState()
 
     var expandedItem by remember { mutableStateOf<String?>(null) }
 
@@ -140,7 +199,7 @@ fun SupportScreen(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
                         ) {
-                            navController.popBackStack()
+                            navController.safePopBackStack()
                         },
                     contentAlignment = Alignment.Center
                 ) {
@@ -357,9 +416,18 @@ fun SupportScreen(
 
                 Spacer(Modifier.height(8.dp))
 
+                val messageError = Validators.text(
+                    uiState.message, "Your message", max = FEEDBACK_MAX, required = false
+                )
+                val ratingError = if (uiState.rating == 0) "Choose a star rating." else null
+
                 OutlinedTextField(
                     value = uiState.message,
-                    onValueChange = { supportViewModel.onMessageChanged(it) },
+                    onValueChange = {
+                        supportViewModel.onMessageChanged(it)
+                        feedbackForm.touch("message")
+                    },
+                    isError = feedbackForm.shown("message", messageError) != null,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(100.dp),
@@ -373,12 +441,19 @@ fun SupportScreen(
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedContainerColor = SurfaceSoft,
                         unfocusedContainerColor = SurfaceSoft,
+                        errorContainerColor = SurfaceSoft,
                         focusedBorderColor = Primary,
                         unfocusedBorderColor = Color.Transparent,
                         cursorColor = Primary
                     ),
                     shape = RoundedCornerShape(16.dp)
                 )
+
+                CharacterCounter(uiState.message.trim().length, FEEDBACK_MAX)
+                FieldErrorText(feedbackForm.shown("message", messageError))
+                // The rating is the one required part; say so under the form
+                // once Submit is pressed without one.
+                FieldErrorText(if (feedbackForm.submitted) ratingError else null)
 
                 if (uiState.errorMessage != null) {
 
@@ -392,11 +467,22 @@ fun SupportScreen(
 
                 Spacer(Modifier.height(16.dp))
 
+                // Mirrors the server's feedback limits (see SupportViewModel):
+                // while a wait is in effect the button says how long, rather
+                // than accepting a tap that would only be discarded.
+                val cooldown = uiState.cooldownSecondsLeft
                 PrimaryButton(
-                    text = "Submit Feedback",
+                    text = when {
+                        cooldown <= 0 -> "Submit Feedback"
+                        cooldown < 60 -> "Send again in ${cooldown}s"
+                        else -> "Send again in ${(cooldown + 59) / 60} min"
+                    },
+                    enabled = cooldown <= 0,
                     isLoading = uiState.isSubmitting,
                     onClick = {
-                        supportViewModel.submitFeedback()
+                        if (feedbackForm.submit(ratingError, messageError)) {
+                            supportViewModel.submitFeedback()
+                        }
                     }
                 )
             }
@@ -525,3 +611,6 @@ private fun ContactRow(
         }
     }
 }
+
+/** Longest feedback message accepted (Firestore-friendly; generous for real feedback). */
+private const val FEEDBACK_MAX = 1000

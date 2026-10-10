@@ -104,6 +104,12 @@ class VoiceoverController {
             return
         }
 
+        // Already fetching/preparing this very section: a second tap (a
+        // double tap on "Listen") must not start a second copy. It used to —
+        // both loads finished, both players started, and only the second
+        // was tracked, so the first kept talking with no way to stop it.
+        if (loadingSection == section) return
+
         // A different section: the previous one is discarded, including one
         // still loading.
         release()
@@ -226,6 +232,12 @@ class VoiceoverController {
         )
 
         media.setOnPreparedListener { prepared ->
+            // Superseded while preparing (stopped, or another section
+            // started): never play an orphan nobody can stop.
+            if (controller.player !== prepared) {
+                runCatching { prepared.release() }
+                return@setOnPreparedListener
+            }
             controller.loadingSection = null
             controller.activeSection = section
             controller.isPlaying = true
@@ -243,7 +255,11 @@ class VoiceoverController {
             controller.positionMs = controller.durationMs
         }
 
-        media.setOnErrorListener { _, what, extra ->
+        media.setOnErrorListener { failed, what, extra ->
+            if (controller.player !== failed) {
+                runCatching { failed.release() }
+                return@setOnErrorListener true
+            }
             Log.e("Voiceover", "MediaPlayer error $what / $extra")
             controller.loadingSection = null
             controller.activeSection = null
@@ -258,10 +274,14 @@ class VoiceoverController {
             // Async, because the audio streams from Storage over what is
             // often a poor connection on site. prepare() would block the main
             // thread for as long as that takes.
-            media.prepareAsync()
+            // Only one player may exist: drop any other before this one
+            // becomes the tracked player.
+            release()
             player = media
+            media.prepareAsync()
         } catch (e: Exception) {
             Log.e("Voiceover", "Could not open $url", e)
+            if (player === media) player = null
             loadingSection = null
             error = "Couldn't load that narration."
             runCatching { media.release() }

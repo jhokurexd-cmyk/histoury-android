@@ -22,9 +22,13 @@ class SiteContentRepository {
 
             // The geofences collection uses the site's slug as its own
             // document ID, so we try that convention first here too.
+            // "/" can't appear in a document id (a site named with a slash
+            // made this throw and the content never loaded); the admin panel
+            // and Cloud Functions store such a site's content under the id
+            // with "/" replaced by "_" — see contentDocIdFor in both.
             var document = db
                 .collection("site_content")
-                .document(siteId)
+                .document(siteId.trim().replace('/', '_'))
                 .get()
                 .await()
 

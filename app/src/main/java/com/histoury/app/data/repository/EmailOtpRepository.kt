@@ -22,6 +22,22 @@ class EmailOtpRepository {
     // which is legacy us-central1), so this needs the explicit region.
     private val functions = FirebaseFunctions.getInstance("asia-southeast1")
 
+    /**
+     * Live "is this email free?" check for Register / Change Email (the
+     * checkEmailAvailable function). Only a hint for the form: sendEmailOtp
+     * enforces the same rule. Fails quietly (the caller shows nothing) if the
+     * function isn't reachable.
+     */
+    suspend fun isEmailAvailable(email: String): Result<Boolean> = try {
+        val result = functions.getHttpsCallable("checkEmailAvailable")
+            .call(hashMapOf("email" to email.trim()))
+            .await()
+        val available = (result.getData() as? Map<*, *>)?.get("available") as? Boolean
+        if (available != null) Result.success(available) else Result.failure(IllegalStateException("No answer"))
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
     suspend fun sendOtp(email: String, purpose: String): Result<Unit> {
 
         return try {
@@ -52,6 +68,40 @@ class EmailOtpRepository {
                         "email" to email.trim(),
                         "code" to code.trim(),
                         "purpose" to purpose
+                    )
+                )
+                .await()
+
+            Result.success(Unit)
+
+        } catch (e: Exception) {
+            Result.failure(Exception(friendlyMessage(e)))
+        }
+    }
+
+    /**
+     * Creates the account server-side once [code] checks out (the
+     * registerWithOtp Cloud Function). The code is verified and the login
+     * and profile are created in the same call.
+     */
+    suspend fun registerWithOtp(
+        firstName: String,
+        lastName: String,
+        email: String,
+        password: String,
+        code: String
+    ): Result<Unit> {
+
+        return try {
+
+            functions.getHttpsCallable("registerWithOtp")
+                .call(
+                    hashMapOf(
+                        "email" to email.trim(),
+                        "code" to code.trim(),
+                        "password" to password,
+                        "firstName" to firstName.trim(),
+                        "lastName" to lastName.trim()
                     )
                 )
                 .await()

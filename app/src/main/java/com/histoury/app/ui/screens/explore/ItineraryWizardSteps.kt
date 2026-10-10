@@ -1,6 +1,10 @@
 package com.histoury.app.ui.screens.explore
 
+import com.histoury.app.ui.tutorial.TutorialStep
+import com.histoury.app.ui.tutorial.TutorialTour
+import com.histoury.app.ui.tutorial.tutorialTarget
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -77,6 +81,33 @@ fun SelectSitesStep(
 
     val uiState by viewModel.uiState.collectAsState()
 
+    TutorialTour(
+        id = "builder_sites",
+        enabled = !uiState.isLoadingCatalog,
+        steps = listOf(
+            TutorialStep(
+                target = null,
+                title = "Plan a trip in 3 steps",
+                body = "1. Pick the historical sites you want to see.\n2. Choose your interests (optional).\n3. Add suggested spots nearby.\nHistoury then puts them in the best order for you."
+            ),
+            TutorialStep(
+                target = "builder_first_site",
+                title = "Read about a site",
+                body = "Tap a card to see the site's photos and details before deciding."
+            ),
+            TutorialStep(
+                target = "builder_first_site_circle",
+                title = "Add it to your trip",
+                body = "Tap the circle in the corner to pick the site. Picked sites get a coral border; tap again to remove."
+            ),
+            TutorialStep(
+                target = "builder_sites_continue",
+                title = "Continue",
+                body = "Picked everything you want? Tap Continue to go to the next step."
+            )
+        )
+    )
+
     Scaffold(containerColor = SurfaceSoft) { padding ->
 
         Column(
@@ -87,7 +118,7 @@ fun SelectSitesStep(
 
             WizardStepHeader(
                 title = "Select Historical Sites",
-                subtitle = "Tap \u2139 on any site to see what it offers before you pick",
+                subtitle = "Tap a site to see its details \u2022 tap the circle to pick it",
                 stepLabel = "1 / 3",
                 onBackClick = onClose
             )
@@ -118,13 +149,18 @@ fun SelectSitesStep(
                             subtitle = site.location,
                             imageUrl = site.featuredImage,
                             isSelected = isSelected,
-                            onClick = { viewModel.toggleSiteSelected(site.documentId) },
-                            onInfoClick = {
+                            onToggleSelected = { viewModel.toggleSiteSelected(site.documentId) },
+                            onOpenDetails = {
                                 viewModel.openStopPreview(
                                     refId = site.documentId,
                                     refType = "site",
                                     mode = StopPreviewMode.SELECTION
                                 )
+                            },
+                            tutorialKey = if (site.documentId == uiState.allSites.firstOrNull()?.documentId) {
+                                "builder_first_site"
+                            } else {
+                                null
                             }
                         )
                     }
@@ -145,14 +181,16 @@ fun SelectSitesStep(
                         Spacer(Modifier.height(12.dp))
                     }
 
-                    PrimaryButton(
-                        text = if (uiState.selectedSiteIds.isEmpty()) {
-                            "Continue"
-                        } else {
-                            "Continue \u2022 ${uiState.selectedSiteIds.size} selected"
-                        },
-                        onClick = { viewModel.goToInterestsStep() }
-                    )
+                    Box(Modifier.tutorialTarget("builder_sites_continue")) {
+                        PrimaryButton(
+                            text = if (uiState.selectedSiteIds.isEmpty()) {
+                                "Continue"
+                            } else {
+                                "Continue \u2022 ${uiState.selectedSiteIds.size} selected"
+                            },
+                            onClick = { viewModel.goToInterestsStep() }
+                        )
+                    }
                 }
             }
         }
@@ -167,20 +205,29 @@ private fun SelectableCard(
     subtitle: String,
     imageUrl: String,
     isSelected: Boolean,
-    onClick: () -> Unit,
-    onInfoClick: () -> Unit
+    onToggleSelected: () -> Unit,
+    onOpenDetails: () -> Unit,
+    // Set on the first card only, so the tutorial can point at it.
+    tutorialKey: String? = null
 ) {
 
+    // Tapping the card (picture or name) opens the site's details. Only the
+    // circle in the corner selects — so browsing never changes the trip.
     Column(
         modifier = Modifier
+            .then(if (tutorialKey != null) Modifier.tutorialTarget(tutorialKey) else Modifier)
             .fillMaxWidth()
             .shadow(elevation = 3.dp, shape = RoundedCornerShape(18.dp))
             .clip(RoundedCornerShape(18.dp))
             .background(CardSurface)
+            .then(
+                if (isSelected) Modifier.border(2.dp, Primary, RoundedCornerShape(18.dp))
+                else Modifier
+            )
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-                onClick = onClick
+                onClick = onOpenDetails
             )
     ) {
 
@@ -197,33 +244,12 @@ private fun SelectableCard(
                 modifier = Modifier.fillMaxSize()
             )
 
-            Box(
+            SelectCircle(
+                isSelected = isSelected,
+                onClick = onToggleSelected,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(8.dp)
-                    .size(24.dp)
-                    .clip(CircleShape)
-                    .background(if (isSelected) Primary else Color.White.copy(alpha = 0.9f)),
-                contentAlignment = Alignment.Center
-            ) {
-                if (isSelected) {
-                    Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = "Selected",
-                        tint = Color.White,
-                        modifier = Modifier.size(14.dp)
-                    )
-                }
-            }
-
-            // Sits opposite the checkmark so the two controls read as
-            // separate: one changes the trip, the other only explains.
-            PreviewInfoButton(
-                onClick = onInfoClick,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(4.dp),
-                background = Color.White.copy(alpha = 0.92f)
+                    .then(if (tutorialKey != null) Modifier.tutorialTarget(tutorialKey + "_circle") else Modifier)
             )
         }
 
@@ -316,6 +342,22 @@ fun SelectInterestsStep(
 
     val uiState by viewModel.uiState.collectAsState()
 
+    TutorialTour(
+        id = "builder_interests",
+        steps = listOf(
+            TutorialStep(
+                target = "builder_interests",
+                title = "What do you enjoy?",
+                body = "Pick a few, like food or parks, and we'll suggest spots near your sites that fit. This step is optional."
+            ),
+            TutorialStep(
+                target = "builder_interests_continue",
+                title = "Next",
+                body = "With interests picked, this finds recommendations. With none, it goes straight to your route."
+            )
+        )
+    )
+
     Scaffold(containerColor = SurfaceSoft) { padding ->
 
         Column(
@@ -337,10 +379,12 @@ fun SelectInterestsStep(
                     .padding(20.dp)
             ) {
 
-                FlowingInterestChips(
-                    selectedKeys = uiState.selectedInterestCategories,
-                    onToggle = { key -> viewModel.toggleInterestCategory(key) }
-                )
+                Box(Modifier.tutorialTarget("builder_interests")) {
+                    FlowingInterestChips(
+                        selectedKeys = uiState.selectedInterestCategories,
+                        onToggle = { key -> viewModel.toggleInterestCategory(key) }
+                    )
+                }
 
                 Spacer(Modifier.height(20.dp))
 
@@ -358,20 +402,22 @@ fun SelectInterestsStep(
                     .padding(20.dp)
             ) {
 
-                PrimaryButton(
-                    text = if (uiState.selectedInterestCategories.isEmpty()) {
-                        "Continue Without Interests"
-                    } else {
-                        "Find Recommendations"
-                    },
-                    onClick = {
-                        if (uiState.selectedInterestCategories.isEmpty()) {
-                            viewModel.generateRoute()
+                Box(Modifier.tutorialTarget("builder_interests_continue")) {
+                    PrimaryButton(
+                        text = if (uiState.selectedInterestCategories.isEmpty()) {
+                            "Continue Without Interests"
                         } else {
-                            viewModel.goToRecommendationsStep()
+                            "Find Recommendations"
+                        },
+                        onClick = {
+                            if (uiState.selectedInterestCategories.isEmpty()) {
+                                viewModel.generateRoute()
+                            } else {
+                                viewModel.goToRecommendationsStep()
+                            }
                         }
-                    }
-                )
+                    )
+                }
             }
         }
     }
@@ -388,6 +434,22 @@ fun RecommendationsStep(
 
     val uiState by viewModel.uiState.collectAsState()
 
+    TutorialTour(
+        id = "builder_recommendations",
+        steps = listOf(
+            TutorialStep(
+                target = null,
+                title = "Suggested spots",
+                body = "These places are close to the sites you picked and match your interests. Tap one for details, or tap its circle to add it to your trip."
+            ),
+            TutorialStep(
+                target = "builder_generate",
+                title = "Make your route",
+                body = "Histoury puts every stop in the shortest walking order and works out how long your day takes."
+            )
+        )
+    )
+
     Scaffold(containerColor = SurfaceSoft) { padding ->
 
         Column(
@@ -398,7 +460,7 @@ fun RecommendationsStep(
 
             WizardStepHeader(
                 title = "Smart Recommendations",
-                subtitle = "Tap Details to see hours, prices and photos first",
+                subtitle = "Tap a spot for details \u2022 tap the circle to add it",
                 stepLabel = "3 / 3",
                 onBackClick = { viewModel.backToInterests() }
             )
@@ -426,7 +488,7 @@ fun RecommendationsStep(
                 RecommendationsList(
                     viewModel = viewModel,
                     places = uiState.recommendedPlaces,
-                    dismissedIds = uiState.dismissedRecommendationIds
+                    selectedIds = uiState.selectedRecommendationIds
                 )
             }
 
@@ -445,10 +507,12 @@ fun RecommendationsStep(
                         CircularProgressIndicator(color = Primary, modifier = Modifier.size(28.dp))
                     }
                 } else {
-                    PrimaryButton(
-                        text = "Generate Optimized Route",
-                        onClick = { viewModel.generateRoute() }
-                    )
+                    Box(Modifier.tutorialTarget("builder_generate")) {
+                        PrimaryButton(
+                            text = "Generate Optimized Route",
+                            onClick = { viewModel.generateRoute() }
+                        )
+                    }
                 }
             }
         }
@@ -461,7 +525,7 @@ fun RecommendationsStep(
 private fun ColumnScope.RecommendationsList(
     viewModel: ItineraryViewModel,
     places: List<Place>,
-    dismissedIds: Set<String>
+    selectedIds: Set<String>
 ) {
 
     LazyColumn(
@@ -472,19 +536,29 @@ private fun ColumnScope.RecommendationsList(
 
         lazyColumnItems(places) { place ->
 
-            val isKept = place.documentId !in dismissedIds
+            val isSelected = place.documentId in selectedIds
 
+            // Same rule as step 1: the row (picture or name) opens details,
+            // the circle on the right adds it to the trip.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .shadow(elevation = 2.dp, shape = RoundedCornerShape(16.dp))
                     .clip(RoundedCornerShape(16.dp))
                     .background(CardSurface)
+                    .then(
+                        if (isSelected) Modifier.border(2.dp, Primary, RoundedCornerShape(16.dp))
+                        else Modifier
+                    )
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) {
-                        viewModel.toggleRecommendationDismissed(place.documentId)
+                        viewModel.openStopPreview(
+                            refId = place.documentId,
+                            refType = "place",
+                            mode = StopPreviewMode.RECOMMENDATION
+                        )
                     }
                     .padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -537,37 +611,61 @@ private fun ColumnScope.RecommendationsList(
                             color = TextSecondary
                         )
                     }
-
-                    Spacer(Modifier.height(2.dp))
-
-                    PreviewDetailsLink(
-                        onClick = {
-                            viewModel.openStopPreview(
-                                refId = place.documentId,
-                                refType = "place",
-                                mode = StopPreviewMode.RECOMMENDATION
-                            )
-                        },
-                        modifier = Modifier.offset(x = (-8).dp)
-                    )
                 }
 
-                Box(
-                    modifier = Modifier
-                        .size(26.dp)
-                        .clip(CircleShape)
-                        .background(if (isKept) Primary else SurfaceSoft),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (isKept) {
-                        Icon(
-                            imageVector = Icons.Default.Check,
-                            contentDescription = "Included",
-                            tint = Color.White,
-                            modifier = Modifier.size(15.dp)
-                        )
-                    }
-                }
+                SelectCircle(
+                    isSelected = isSelected,
+                    onClick = { viewModel.toggleRecommendationSelected(place.documentId) },
+                    unselectedFill = SurfaceSoft
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The select control on builder cards. Its own 44dp touch target, separate
+ * from the card's tap-for-details, so picking a stop and reading about it
+ * never get mixed up.
+ */
+@Composable
+private fun SelectCircle(
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    unselectedFill: Color = Color.White.copy(alpha = 0.92f)
+) {
+
+    Box(
+        modifier = modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+
+        Box(
+            modifier = Modifier
+                .size(26.dp)
+                .clip(CircleShape)
+                .background(if (isSelected) Primary else unselectedFill)
+                .then(
+                    if (isSelected) Modifier
+                    else Modifier.border(2.dp, TextSecondary, CircleShape)
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isSelected) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Selected",
+                    tint = Color.White,
+                    modifier = Modifier.size(15.dp)
+                )
             }
         }
     }

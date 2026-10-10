@@ -33,12 +33,15 @@ class RoutePathRepository(
     private val directionsRepository: DirectionsRepository = DirectionsRepository()
 ) {
 
-    /** Shared across instances — the same leg is often requested by several screens. */
-    private val legCache = ConcurrentHashMap<String, RouteLeg>()
-
     suspend fun getPath(
         orderedPoints: List<LatLng>,
-        mode: TravelMode = TravelMode.WALKING
+        mode: TravelMode = TravelMode.WALKING,
+        /**
+         * Aligned with [orderedPoints]: the historical site id of each stop
+         * (null for places). A leg into a site then ends at its verified
+         * visitor entrance instead of the road nearest its centre.
+         */
+        siteIds: List<String?> = emptyList()
     ): RoutePath {
 
         if (orderedPoints.size < 2) {
@@ -62,7 +65,8 @@ class RoutePathRepository(
                             toIndex = toIndex,
                             origin = endpoints.first,
                             destination = endpoints.second,
-                            mode = mode
+                            mode = mode,
+                            destinationSiteId = siteIds.getOrNull(toIndex)
                         )
                     }
                 }.awaitAll()
@@ -79,16 +83,18 @@ class RoutePathRepository(
         toIndex: Int,
         origin: LatLng,
         destination: LatLng,
-        mode: TravelMode
+        mode: TravelMode,
+        destinationSiteId: String? = null
     ): RouteLeg {
 
-        val key = cacheKey(origin, destination, mode)
+        val key = cacheKey(origin, destination, mode) + "|" + destinationSiteId.orEmpty()
 
         legCache[key]?.let { cached ->
             return cached.copy(fromIndex = fromIndex, toIndex = toIndex)
         }
 
-        val result = directionsRepository.getDirections(origin, destination, mode)
+        val outcome = directionsRepository.getDirectionsOutcome(origin, destination, mode, destinationSiteId)
+        val result = (outcome as? com.histoury.app.data.repository.DirectionsOutcome.Success)?.result
 
         val leg = if (result != null && result.routePoints.size >= 2) {
 
@@ -98,13 +104,19 @@ class RoutePathRepository(
                 points = result.routePoints,
                 distanceMeters = result.distanceMeters,
                 durationSeconds = result.durationSeconds,
-                isStraightLineFallback = false
+                isStraightLineFallback = false,
+                attribution = result.attribution,
+                endsAtVerifiedEntrance = result.destination?.isVerifiedEntrance == true,
+                warnings = result.warnings
             )
 
         } else {
 
-            // Offline, quota exhausted, or no route for this mode. A dashed
-            // straight line with an honest estimate beats an empty map.
+            // Offline, still rate limited after retrying, or no route for
+            // this mode. The leg keeps a padded crow-flies ESTIMATE of time
+            // and distance for the schedule, but it is flagged so it is
+            // never drawn: a straight line across walls and buildings looks
+            // like a walking route and isn't one.
             straightLineLeg(fromIndex, toIndex, origin, destination, mode)
         }
 
@@ -165,7 +177,17 @@ class RoutePathRepository(
 
     companion object {
 
-        private const val PARALLEL_LEGS = 4
+        /**
+         * Shared across instances — the same leg is often requested by
+         * several screens. Lives in the companion object so it actually is
+         * shared; as an instance field every new ViewModel started with an
+         * empty cache and re-billed legs it had already fetched.
+         */
+        private val legCache = ConcurrentHashMap<String, RouteLeg>()
+
+        // Two at a time: fast enough for a long itinerary, and gentle on the
+        // server's per-visitor rate limit (see DirectionsRepository).
+        private const val PARALLEL_LEGS = 2
 
         private const val STREET_DETOUR_FACTOR = 1.3f
 

@@ -61,7 +61,9 @@ fun ExploreGridCard(
     imageUrl: String,
     rating: Double?,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // "1.2 km" from the visitor, or null when their location isn't known.
+    distanceText: String? = null
 ) {
 
     val interactionSource = remember { MutableInteractionSource() }
@@ -121,70 +123,67 @@ fun ExploreGridCard(
                 )
         )
 
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(8.dp),
-            shape = RoundedCornerShape(50),
-            color = Color.White.copy(alpha = 0.95f)
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                verticalAlignment = Alignment.CenterVertically
+        // Same corner system as the Home cards, at the compact grid size:
+        // badge top-left, title + arrow sharing the bottom row.
+        if (rating != null && rating > 0.0) {
+            RatingBadge(
+                rating = rating,
+                height = OverlayControls.CompactControlSize,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(OverlayControls.CompactInset)
+            )
+        } else if (rating == null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(OverlayControls.CompactInset)
+                    .height(OverlayControls.CompactControlSize)
+                    .shadow(elevation = 3.dp, shape = RoundedCornerShape(50))
+                    .clip(RoundedCornerShape(50))
+                    .background(CardSurface.copy(alpha = 0.94f))
+                    .padding(horizontal = 10.dp),
+                contentAlignment = Alignment.Center
             ) {
-                if (rating != null) {
-                    Icon(
-                        imageVector = Icons.Default.Star,
-                        contentDescription = null,
-                        tint = RatingStar,
-                        modifier = Modifier.size(11.dp)
-                    )
-                    Spacer(Modifier.width(3.dp))
-                    Text(
-                        text = "%.1f".format(rating),
-                        color = Primary,
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                } else {
-                    Text(
-                        text = badgeText,
-                        color = Primary,
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1
-                    )
-                }
+                Text(
+                    text = badgeText,
+                    color = Primary,
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
             }
         }
 
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(10.dp)
-                .size(28.dp)
-                .clip(CircleShape)
-                .background(Primary),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                contentDescription = "View details",
-                tint = Color.White,
-                modifier = Modifier.size(13.dp)
-            )
-        }
-
-        Text(
-            text = title,
-            fontWeight = FontWeight.Bold,
-            style = MaterialTheme.typography.bodyMedium,
-            color = Color.White,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+        Row(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 12.dp, end = 46.dp, bottom = 14.dp)
-        )
+                .fillMaxWidth()
+                .padding(
+                    start = 12.dp,
+                    end = OverlayControls.CompactInset,
+                    bottom = OverlayControls.CompactInset
+                ),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (distanceText != null) {
+                    CardDistanceLine(distanceText, compact = true)
+                }
+            }
+
+            Spacer(Modifier.width(6.dp))
+
+            CardArrowBadge(size = OverlayControls.CompactControlSize)
+        }
     }
 }

@@ -45,6 +45,18 @@ class GeofenceManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     suspend fun registerGeofences(geofences: List<Geofence>) {
 
+        // Every caller passes the FULL current set of active geofences from
+        // Firestore, never an incremental diff — so start from a clean
+        // slate every time. addGeofences() below can only ADD a fence or
+        // REPLACE one sharing the same requestId; it has no way to remove a
+        // fence whose siteId Firestore no longer lists as active. Without
+        // this, deactivating a site's geofence in the admin panel never
+        // reached devices that already had it registered: the NEVER_EXPIRE
+        // fence just stayed on the phone forever, still firing arrivals for
+        // a site the team turned off, and each one left behind eats into
+        // Android's fixed 100-geofence-per-app cap.
+        removeAllGeofences()
+
         if (geofences.isEmpty()) {
             return
         }

@@ -1,9 +1,13 @@
 package com.histoury.app.ui.screens.sitedetails
 
+import com.histoury.app.ui.tutorial.TutorialStep
+import com.histoury.app.ui.tutorial.TutorialTour
+import com.histoury.app.ui.tutorial.tutorialTarget
+import com.histoury.app.navigation.safePopBackStack
+import com.histoury.app.navigation.navigateSafely
 import com.histoury.app.data.offline.ArModelCache
 import com.histoury.app.data.model.isArReady
 import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -24,6 +28,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -43,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
+import com.histoury.app.ui.components.WrapRow
 import com.histoury.app.ui.components.rememberVoiceoverController
 import com.histoury.app.ui.components.SiteContentTabRow
 import com.histoury.app.ui.components.SiteContentTabBody
@@ -67,6 +73,15 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import com.histoury.app.theme.Outline
 import com.histoury.app.theme.TextTertiary
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.text.style.TextOverflow
+import com.histoury.app.theme.SurfaceSoft
+import com.histoury.app.ui.components.ImageLightbox
+import com.histoury.app.ui.components.SiteFavoriteButton
+import com.histoury.app.ui.components.HeroIconButton
+import com.histoury.app.ui.components.HeroOverlayInset
+import com.histoury.app.ui.components.HeroCardOverlap
 import kotlin.math.roundToInt
 
 @Composable
@@ -117,16 +132,27 @@ fun SiteDetailsScreen(
             }
 
             uiState.errorMessage != null -> {
-                Box(
+                // The hero (and its back button) never renders on this path,
+                // so the error state carries its own way out and a retry.
+                Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(24.dp),
-                    contentAlignment = Alignment.Center
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
                 ) {
                     Text(
                         text = uiState.errorMessage ?: "",
-                        color = TextSecondary
+                        color = TextSecondary,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
+                    Spacer(Modifier.height(12.dp))
+                    TextButton(onClick = { siteDetailsViewModel.loadSite(siteId) }) {
+                        Text("Try again", color = Primary, fontWeight = FontWeight.Bold)
+                    }
+                    TextButton(onClick = { navController.safePopBackStack() }) {
+                        Text("Go back", color = TextSecondary)
+                    }
                 }
             }
 
@@ -135,6 +161,18 @@ fun SiteDetailsScreen(
                 val site = uiState.site!!
 
                 val content = uiState.content
+
+                // The photo is cropped to fit the header, so a tap opens it
+                // whole. Saveable so a rotation doesn't close it.
+                var showHeroImage by rememberSaveable { mutableStateOf(false) }
+
+                if (showHeroImage && site.featuredImage.isNotBlank()) {
+                    ImageLightbox(
+                        images = listOf(site.featuredImage),
+                        startIndex = 0,
+                        onDismiss = { showHeroImage = false }
+                    )
+                }
 
                 Column(
                     modifier = Modifier
@@ -146,135 +184,144 @@ fun SiteDetailsScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(320.dp)
+                            .height(300.dp)
+                            // Shown while the photo loads (or if it can't),
+                            // instead of a blank white block.
+                            .background(SurfaceSoft)
                     ) {
 
                         AsyncImage(
                             model = site.featuredImage,
                             contentDescription = site.siteName,
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clickable(
+                                    enabled = site.featuredImage.isNotBlank(),
+                                    onClickLabel = "View photo",
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { showHeroImage = true },
                             contentScale = ContentScale.Crop
                         )
 
+                        // Two scrims, sized to the header rather than set in
+                        // raw pixels (the old 420px start sat below the
+                        // image on dense screens, so there was no scrim at
+                        // all): one behind the round buttons at the top,
+                        // one behind the rating badge at the bottom, so both
+                        // stay legible over a bright sky or a white wall.
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .background(
                                     Brush.verticalGradient(
-                                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.32f)),
-                                        startY = 420f
+                                        0f to Color.Black.copy(alpha = 0.28f),
+                                        0.3f to Color.Transparent,
+                                        0.65f to Color.Transparent,
+                                        1f to Color.Black.copy(alpha = 0.38f)
                                     )
                                 )
                         )
 
-                        // Back button
-                        Box(
+                        // Back button. Insets go on the modifier; the
+                        // shared button draws its own circle after them.
+                        HeroIconButton(
+                            icon = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            onClick = { navController.safePopBackStack() },
                             modifier = Modifier
                                 .align(Alignment.TopStart)
-                                // Order matters here, and getting it wrong is
-                                // what stretched this button into a pill: an
-                                // inset applied after background() pads the
-                                // icon *inside* the circle instead of moving
-                                // the circle down. Insets first, then shape,
-                                // then the icon's own padding.
                                 .statusBarsPadding()
-                                .padding(16.dp)
-                                .clip(CircleShape)
-                                .background(CardSurface)
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ) {
-                                    navController.popBackStack()
-                                }
-                                .padding(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = Primary
-                            )
-                        }
+                                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
+                                .padding(HeroOverlayInset)
+                        )
 
                         // Share and favourite, paired as in the design.
                         Row(
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
                                 .statusBarsPadding()
-                                .padding(16.dp),
+                                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
+                                .padding(HeroOverlayInset),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
 
-                            HeroCircleButton(
-                                icon = Icons.Default.Share,
-                                description = "Share this site",
-                                onClick = {
-                                    val text = buildString {
-                                        append(site.siteName)
-                                        if (site.location.isNotBlank()) {
-                                            append(" — ")
-                                            append(site.location)
+                            Box(Modifier.tutorialTarget("site_share")) {
+                                HeroIconButton(
+                                    icon = Icons.Default.Share,
+                                    contentDescription = "Share this site",
+                                    onClick = {
+                                        val text = buildString {
+                                            append(site.siteName)
+                                            if (site.location.isNotBlank()) {
+                                                append(" — ")
+                                                append(site.location)
+                                            }
+                                            append("\n\nDiscover it on Histoury.")
                                         }
-                                        append("\n\nDiscover it on Histoury.")
-                                    }
-                                    // A plain text share rather than a deep
-                                    // link: the app has no public web page to
-                                    // point at, and a link that opens nothing
-                                    // is worse than a name somebody can search.
-                                    context.startActivity(
-                                        Intent.createChooser(
-                                            Intent(Intent.ACTION_SEND).apply {
-                                                type = "text/plain"
-                                                putExtra(Intent.EXTRA_SUBJECT, site.siteName)
-                                                putExtra(Intent.EXTRA_TEXT, text)
-                                            },
-                                            "Share ${site.siteName}"
+                                        // A plain text share rather than a deep
+                                        // link: the app has no public web page to
+                                        // point at, and a link that opens nothing
+                                        // is worse than a name somebody can search.
+                                        context.startActivity(
+                                            Intent.createChooser(
+                                                Intent(Intent.ACTION_SEND).apply {
+                                                    type = "text/plain"
+                                                    putExtra(Intent.EXTRA_SUBJECT, site.siteName)
+                                                    putExtra(Intent.EXTRA_TEXT, text)
+                                                },
+                                                "Share ${site.siteName}"
+                                            )
                                         )
-                                    )
-                                }
-                            )
+                                    }
+                                )
+                            }
 
-                            HeroCircleButton(
-                                icon = if (uiState.isBookmarked) {
-                                    Icons.Default.Favorite
-                                } else {
-                                    Icons.Default.FavoriteBorder
-                                },
-                                description = "Bookmark this site",
-                                onClick = { siteDetailsViewModel.onBookmarkToggle() }
-                            )
+                            // The real Favorites toggle, shared with Home,
+                            // the map and Menu > Favorites.
+                            Box(Modifier.tutorialTarget("site_favorite")) {
+                                SiteFavoriteButton(
+                                    siteDocumentId = site.documentId,
+                                    siteName = site.siteName,
+                                    visualSize = 44.dp
+                                )
+                            }
                         }
 
                         // Rating badge, floating over the bottom edge of the image
-                        Surface(
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .padding(start = 20.dp, bottom = 26.dp),
-                            shape = RoundedCornerShape(50),
-                            color = CardSurface
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                        // (hidden until someone has rated it — "0.0 (0)" reads as a bad score)
+                        if (site.reviewCount > 0) {
+                            Surface(
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    // Clear of the card's overlap, like Place Details' chip.
+                                    .padding(start = 20.dp, bottom = HeroCardOverlap + 14.dp),
+                                shape = RoundedCornerShape(50),
+                                color = CardSurface
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Star,
-                                    contentDescription = null,
-                                    tint = RatingStar,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    text = "%.1f".format(site.averageRating),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp,
-                                    color = TextPrimary
-                                )
-                                Text(
-                                    text = " (${site.reviewCount})",
-                                    fontSize = 11.sp,
-                                    color = TextSecondary
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Star,
+                                        contentDescription = null,
+                                        tint = RatingStar,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(
+                                        text = "%.1f".format(site.averageRating),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = TextPrimary
+                                    )
+                                    Text(
+                                        text = " (${site.reviewCount})",
+                                        fontSize = 11.sp,
+                                        color = TextSecondary
+                                    )
+                                }
                             }
                         }
 
@@ -309,53 +356,58 @@ fun SiteDetailsScreen(
                         // sites sits inside, so it belongs as a label rather
                         // than repeated inside each title.
                         if (site.location.isNotBlank()) {
+                            // Left-aligned with the name it labels. Pinned to
+                            // the right edge it read as a stray caption rather
+                            // than as the heading's eyebrow.
                             Text(
                                 text = site.location.substringBefore(",").uppercase(),
-                                fontSize = 10.sp,
+                                fontSize = 10.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 1.4.sp,
-                                color = TextTertiary,
-                                modifier = Modifier.align(Alignment.End)
+                                color = TextTertiary
                             )
 
-                            Spacer(Modifier.height(2.dp))
+                            Spacer(Modifier.height(4.dp))
                         }
 
                         Text(
                             text = site.siteName,
                             fontSize = 24.sp,
+                            lineHeight = 30.sp,
                             fontWeight = FontWeight.Bold,
                             color = TextPrimary
                         )
 
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(Modifier.height(8.dp))
 
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(verticalAlignment = Alignment.Top) {
 
                             Icon(
                                 imageVector = Icons.Default.LocationOn,
                                 contentDescription = null,
                                 tint = Primary,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier
+                                    .padding(top = 1.dp)
+                                    .size(16.dp)
                             )
 
                             Spacer(Modifier.width(4.dp))
 
-                            Text(
-                                text = site.location,
-                                color = TextSecondary,
-                                fontSize = 13.sp
-                            )
-
+                            // One text, so a long address wraps as a whole
+                            // instead of squeezing the distance onto a
+                            // column of its own at the right edge.
                             val distanceLabel = formatDistance(uiState.distanceMeters)
 
-                            if (distanceLabel != null) {
-                                Text(
-                                    text = "  •  $distanceLabel",
-                                    color = TextSecondary,
-                                    fontSize = 13.sp
-                                )
-                            }
+                            Text(
+                                text = if (distanceLabel != null) {
+                                    "${site.location}  \u2022  $distanceLabel"
+                                } else {
+                                    site.location
+                                },
+                                color = TextSecondary,
+                                fontSize = 13.sp,
+                                lineHeight = 18.sp
+                            )
                         }
 
                         if (site.entranceFee.isNotBlank()) {
@@ -391,8 +443,12 @@ fun SiteDetailsScreen(
 
                             Spacer(Modifier.height(12.dp))
 
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            // Wraps onto a second line on narrow phones or at
+                            // large font sizes, where a fixed row clipped the
+                            // third chip off the edge.
+                            WrapRow(
+                                horizontalSpacing = 6.dp,
+                                verticalSpacing = 6.dp
                             ) {
                                 uiState.tagNames.take(3).forEach { tag ->
                                     Surface(
@@ -425,14 +481,54 @@ fun SiteDetailsScreen(
                             }
                         }
 
-                        Spacer(Modifier.height(20.dp))
+                        Spacer(Modifier.height(24.dp))
 
-                        SiteContentTabRow(
-                            selectedTab = uiState.selectedTab,
-                            onTabSelected = { tab ->
-                                siteDetailsViewModel.onTabSelected(tab)
-                            }
+                        TutorialTour(
+                            id = "site_details",
+                            steps = listOf(
+                                TutorialStep(
+                                    target = null,
+                                    title = "A site's story",
+                                    body = "This page has everything about the site: photos, its history and practical info like the entrance fee."
+                                ),
+                                TutorialStep(
+                                    target = "site_tabs",
+                                    title = "Read it your way",
+                                    body = "Overview gives the summary, Timeline the key dates, Stories the people and events, and Sources where the facts come from. If a story has narration, tap play to listen."
+                                ),
+                                TutorialStep(
+                                    target = "site_favorite",
+                                    title = "Save to Favorites",
+                                    body = "Tap the heart to keep this site in Menu > Favorites."
+                                ),
+                                TutorialStep(
+                                    target = "site_share",
+                                    title = "Share",
+                                    body = "Send the site's name to a friend."
+                                )
+                            )
                         )
+
+                        TutorialTour(
+                            id = "site_ar_button",
+                            enabled = showArButton && site.isArReady,
+                            steps = listOf(
+                                TutorialStep(
+                                    target = "site_ar",
+                                    title = "Travel back in time",
+                                    body = "You're at the site, so its AR is unlocked. Tap here, point your camera at the area and see the site as it once looked."
+                                )
+                            )
+                        )
+
+                        Box(Modifier.tutorialTarget("site_tabs")) {
+                            SiteContentTabRow(
+                                selectedTab = uiState.selectedTab,
+                                onTabSelected = { tab ->
+                                    siteDetailsViewModel.onTabSelected(tab)
+                                }
+                            )
+                        }
 
                         Spacer(Modifier.height(20.dp))
 
@@ -442,29 +538,35 @@ fun SiteDetailsScreen(
                             fallbackOverview = site.description,
                             voiceover = voiceover,
                             onSourceClick = { url ->
-                                if (url.isNotBlank()) {
-                                    context.startActivity(
-                                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                    )
-                                }
+                                // Adds a missing https:// and shows a message
+                                // instead of crashing when nothing can open it.
+                                com.histoury.app.util.LinkOpener.openWebLink(context, url)
                             }
                         )
 
                         Spacer(Modifier.height(28.dp))
 
                         // Two conditions gate the AR button, and they are
-                        // deliberately separate. showArButton is the location
-                        // gate — you have arrived. arEnabled is the content
-                        // gate — this site actually has a model built AND at
-                        // least one complete anchoring method (reference
-                        // photos or a geospatial placement), by the same rule
-                        // the admin panel uses for "Live in app".
+                        // deliberately separate.
+                        //
+                        //   showArButton   the location gate — you have
+                        //                  arrived at this site.
+                        //   isArReady      the content gate — this site has
+                        //                  AR switched on and a model to
+                        //                  place.
+                        //
+                        // The content gate no longer asks for a reference
+                        // photo or coordinates. Placement is manual, so
+                        // there is nothing for the app to be missing; the
+                        // exact-site geofence check that decides whether AR
+                        // may actually run lives in the AR screen itself.
                         val hasArContent = site.isArReady
 
                         if (showArButton && hasArContent) {
 
                             Row(
                                 modifier = Modifier
+                                    .tutorialTarget("site_ar")
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(16.dp))
                                     .background(AccentGold)
@@ -472,7 +574,7 @@ fun SiteDetailsScreen(
                                         interactionSource = remember { MutableInteractionSource() },
                                         indication = null
                                     ) {
-                                        navController.navigate(
+                                        navController.navigateSafely(
                                             Routes.ARExperience.createRoute(siteId)
                                         )
                                     }
@@ -532,6 +634,10 @@ fun SiteDetailsScreen(
                         }
 
                         Spacer(Modifier.height(12.dp))
+
+                        // The last thing on the page; keep it clear of the
+                        // gesture bar on edge-to-edge phones.
+                        Spacer(Modifier.navigationBarsPadding())
                     }
                 }
             }
@@ -560,39 +666,6 @@ private fun formatDistance(distanceMeters: Float?): String? {
         metres < 50f -> "nearby"
         metres < 1000f -> "${metres.roundToInt()} m away"
         else -> "%.1f km away".format(metres / 1000f)
-    }
-}
-
-/**
- * A circular control floating over the hero photograph.
- *
- * Extracted because back, share and favourite are the same button with a
- * different glyph, and three copies of the same modifier chain is how one of
- * them ends up subtly the wrong size.
- */
-@Composable
-private fun HeroCircleButton(
-    icon: ImageVector,
-    description: String,
-    onClick: () -> Unit
-) {
-
-    Box(
-        modifier = Modifier
-            .clip(CircleShape)
-            .background(CardSurface)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            )
-            .padding(10.dp)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = description,
-            tint = Primary
-        )
     }
 }
 

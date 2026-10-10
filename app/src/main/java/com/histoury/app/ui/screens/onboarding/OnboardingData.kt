@@ -1,91 +1,82 @@
 package com.histoury.app.ui.screens.onboarding
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.AccountBalance
-import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.Church
-import androidx.compose.material.icons.filled.GpsFixed
-import androidx.compose.material.icons.filled.House
-import androidx.compose.material.icons.filled.Navigation
-import androidx.compose.material.icons.filled.PhotoLibrary
-import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.AutoStories
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Verified
+import androidx.compose.material.icons.filled.ViewInAr
 import androidx.compose.ui.graphics.vector.ImageVector
 
-data class FeatureCard(
-    val title: String,
-    val icon: ImageVector? = null
+/** A small labelled chip that floats beside a page's illustration. */
+data class OnboardingHighlight(
+    val label: String,
+    val icon: ImageVector
 )
 
+/**
+ * One onboarding page = one idea. A short eyebrow, a title of a few words,
+ * one or two sentences, and an illustration built from the app's own
+ * shapes (a stacked card with a hero glyph and two feature chips), so the
+ * intro looks like the app rather than stock artwork pasted on top.
+ */
 data class OnboardingPage(
+    val eyebrow: String,
     val title: String,
     val description: String,
-    /**
-     * The page's own hero glyph.
-     *
-     * Previously the screen borrowed the first feature card's icon, so the
-     * hero and the card beneath it were always the same symbol twice — and
-     * two of the three pages opened with the same landmark icon. A page
-     * deserves an image that stands for the whole page, not a duplicate of
-     * one of its parts.
-     */
     val heroIcon: ImageVector,
-    val cards: List<FeatureCard>
+    val highlights: List<OnboardingHighlight>
 )
 
 val onboardingPages = listOf(
 
     OnboardingPage(
-        title = "Welcome to Histoury",
-        description = "Discover Intramuros through interactive historical narratives, augmented reality experiences, and personalized guided tours.",
-
+        eyebrow = "Explore",
+        title = "Discover Intramuros",
+        description = "Find the historical sites of the Walled City and get directions to the ones near you.",
         heroIcon = Icons.Default.AccountBalance,
-
-        cards = listOf(
-            FeatureCard("Historical\nLandmarks", Icons.Default.AccountBalance),
-            FeatureCard("Verified\nNarratives", Icons.Default.Verified),
-            FeatureCard("AR\nExperiences", Icons.Default.CameraAlt)
+        highlights = listOf(
+            OnboardingHighlight("Nearby sites", Icons.Default.Place),
+            OnboardingHighlight("Walking directions", Icons.AutoMirrored.Filled.DirectionsWalk)
         )
     ),
 
     OnboardingPage(
-        title = "Explore Iconic Sites",
-        description = "Visit Fort Santiago, Manila Cathedral, Casa Manila, Plaza de Roma, San Agustin Church, and many more heritage locations.",
-
-        heroIcon = Icons.Default.Church,
-
-        cards = listOf(
-            FeatureCard("Fort\nSantiago", Icons.Default.AccountBalance),
-            FeatureCard("Casa\nManila", Icons.Default.House),
-            FeatureCard("San Agustin\nChurch", Icons.Default.Church)
+        eyebrow = "Learn",
+        title = "Hear the real story",
+        description = "Read verified history and listen to narrations. Each site's full story unlocks when you arrive.",
+        heroIcon = Icons.Default.AutoStories,
+        highlights = listOf(
+            OnboardingHighlight("Verified history", Icons.Default.Verified),
+            OnboardingHighlight("Audio guides", Icons.Default.Headphones)
         )
     ),
 
     OnboardingPage(
-        title = "Navigate & Experience",
-        description = "Receive smart navigation, automatic geofence detection, and immersive AR experiences when visiting historical landmarks.",
-
-        heroIcon = Icons.Default.Navigation,
-
-        cards = listOf(
-            FeatureCard("GPS\nNavigation", Icons.Default.Navigation),
-            FeatureCard("Geofence\nDetection", Icons.Default.GpsFixed),
-            FeatureCard("AR\nExperience", Icons.Default.CameraAlt)
+        eyebrow = "Experience",
+        title = "See the past in AR",
+        description = "Point your camera at a landmark to see how it looked centuries ago.",
+        heroIcon = Icons.Default.ViewInAr,
+        highlights = listOf(
+            OnboardingHighlight("3D reconstructions", Icons.Default.ViewInAr),
+            OnboardingHighlight("Capture the moment", Icons.Default.PhotoCamera)
         )
     ),
 
     OnboardingPage(
-        title = "Capture Every Journey",
-        description = "Save memorable visits, upload photos, review historical sites, and discover the highest-rated destinations in Intramuros.",
-
-        heroIcon = Icons.Default.PhotoLibrary,
-
-        cards = listOf(
-            FeatureCard("Visit\nHistory", Icons.Default.History),
-            FeatureCard("Photo\nGallery", Icons.Default.PhotoLibrary),
-            FeatureCard("Site\nRankings", Icons.Default.EmojiEvents)
+        eyebrow = "Plan",
+        title = "Make the trip yours",
+        description = "Build an itinerary, save your favorite sites, and keep track of every place you visit.",
+        heroIcon = Icons.Default.Route,
+        highlights = listOf(
+            OnboardingHighlight("Favorites", Icons.Default.Favorite),
+            OnboardingHighlight("Visit history", Icons.Default.History)
         )
     )
-
 )

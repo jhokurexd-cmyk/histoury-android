@@ -14,7 +14,9 @@ import kotlinx.coroutines.tasks.await
 data class MenuUiState(
     val displayName: String = "",
     val email: String = "",
-    val photoUrl: String = ""
+    val photoUrl: String = "",
+    /** The profile's own "location" field, when the visitor has set one. */
+    val location: String = ""
 )
 
 class MenuViewModel : ViewModel() {
@@ -64,13 +66,15 @@ class MenuViewModel : ViewModel() {
                 val lastName = userDoc.getString("lastName") ?: ""
                 val fullName = "$firstName $lastName".trim()
                 val profileImage = userDoc.getString("profileImage") ?: ""
+                val profileLocation = userDoc.getString("location")?.trim().orEmpty()
 
                 val finalDisplayName = fullName.ifBlank { authDisplayName }
                 val finalPhotoUrl = profileImage.ifBlank { authPhotoUrl }
 
                 _uiState.value = _uiState.value.copy(
                     displayName = finalDisplayName,
-                    photoUrl = finalPhotoUrl
+                    photoUrl = finalPhotoUrl,
+                    location = profileLocation
                 )
 
                 // If Auth was missing data that Firestore has, sync it now for faster subsequent loads.
@@ -87,6 +91,9 @@ class MenuViewModel : ViewModel() {
     }
 
     fun signOut() {
+        // The in-memory trip belongs to the account being signed out; left
+        // loaded, the next person to sign in on this phone would inherit it.
+        com.histoury.app.data.itinerary.ActiveItineraryTrip.clear()
         firebaseAuth.signOut()
     }
 }

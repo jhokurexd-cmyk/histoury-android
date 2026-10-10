@@ -1,8 +1,10 @@
 package com.histoury.app.data.viewmodel
 
+import com.histoury.app.data.offline.TripPrep
 import android.annotation.SuppressLint
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.model.LatLng
@@ -10,8 +12,10 @@ import com.histoury.app.data.itinerary.ItineraryPlanner
 import com.histoury.app.data.itinerary.ActiveItineraryTrip
 import com.histoury.app.data.model.HistoricalSite
 import com.histoury.app.data.model.Itinerary
+import com.histoury.app.data.model.ItineraryStatus
 import com.histoury.app.data.model.ItineraryStop
 import com.histoury.app.data.model.Place
+import com.histoury.app.data.model.StopStatus
 import com.histoury.app.data.repository.HistoricalSiteRepository
 import com.histoury.app.data.repository.GeofenceRepository
 import com.histoury.app.data.repository.ItineraryRepository
@@ -20,8 +24,13 @@ import com.histoury.app.data.repository.VisitHistoryRepository
 import com.histoury.app.data.repository.TravelMode
 import com.histoury.app.data.routing.RoutePath
 import com.histoury.app.data.routing.RoutePathRepository
+import com.histoury.app.util.VoiceGuidanceManager
 import kotlinx.coroutines.Job
 import com.google.firebase.Timestamp
+import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -79,6 +88,17 @@ data class ItineraryUiState(
     val isLoadingSavedList: Boolean = false,
     val savedItineraries: List<Itinerary> = emptyList(),
 
+    /**
+     * True when the phone had no internet the last time the saved list
+     * loaded. An empty list then means "couldn't check", not "you have no
+     * itineraries" — the screen says so instead of inviting the visitor to
+     * start over.
+     */
+    val isOffline: Boolean = false,
+
+    // The saved list couldn't be read at all (as opposed to "no trips").
+    val savedListLoadFailed: Boolean = false,
+
     val isBuilderActive: Boolean = false,
     val builderStep: BuilderStep = BuilderStep.SELECT_SITES,
     val editingItineraryId: String? = null,
@@ -102,7 +122,13 @@ data class ItineraryUiState(
     val previewTarget: StopPreviewTarget? = null,
 
     val recommendedPlaces: List<Place> = emptyList(),
-    val dismissedRecommendationIds: Set<String> = emptySet(),
+
+    /**
+     * Recommended places the visitor has opted INTO. Recommendations start
+     * unselected — they're suggestions, and the visitor picks which ones
+     * they actually want to go to.
+     */
+    val selectedRecommendationIds: Set<String> = emptySet(),
 
     val isGeneratingRoute: Boolean = false,
     val generatedStops: List<ItineraryStop> = emptyList(),
@@ -127,9 +153,7 @@ data class ItineraryUiState(
 
     val startTimeMinutes: Int = DEFAULT_START_MINUTES,
 
-    val completedStopIds: Set<String> = emptySet(),
-
-    val itineraryStatus: String = "planned",
+    val itineraryStatus: String = ItineraryStatus.PLANNED,
 
     val startedAt: Any? = null,
 
@@ -141,6 +165,9 @@ data class ItineraryUiState(
 
     val isSaving: Boolean = false,
     val errorMessage: String? = null,
+
+    /** Neutral feedback, e.g. the result of "Optimize Order". Auto-dismissed by the UI. */
+    val infoMessage: String? = null,
 
     val showAddStopSheet: Boolean = false
 ) {
@@ -166,7 +193,10 @@ data class ItineraryUiState(
         }
 }
 
-class ItineraryViewModel(application: Application) : AndroidViewModel(application) {
+class ItineraryViewModel(
+    application: Application,
+    private val savedStateHandle: SavedStateHandle
+) : AndroidViewModel(application) {
 
     private val itineraryRepository = ItineraryRepository()
     private val historicalSiteRepository = HistoricalSiteRepository()
@@ -180,28 +210,242 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
     /** Cancelled and replaced whenever the stop order or travel mode changes. */
     private var routePathJob: Job? = null
 
-    private val _uiState = MutableStateFlow(ItineraryUiState())
+    /**
+     * What the open itinerary looked like when it was last loaded or saved —
+     * name, travel mode, start time, stop order and visit lengths. Null for
+     * a brand-new, never-saved route. Compared against the live state to
+     * tell whether leaving the overview would lose anything.
+     */
+    private var savedFingerprint: String? = null
+
+    private fun fingerprint(state: ItineraryUiState): String = buildString {
+        append(state.itineraryName.trim()).append('|')
+        append(state.travelMode.wireValue).append('|')
+        append(state.startTimeMinutes)
+        state.generatedStops.forEach { stop ->
+            append('|').append(stop.refType).append(':').append(stop.refId)
+            append('@').append(stop.estimatedVisitMinutes)
+        }
+    }
+
+    /** True when the route overview holds edits (or a new route) that haven't been saved. */
+    fun hasUnsavedChanges(): Boolean {
+        val state = _uiState.value
+        if (!state.isBuilderActive || state.builderStep != BuilderStep.ROUTE_OVERVIEW) return false
+        if (state.generatedStops.isEmpty()) return false
+        return savedFingerprint != fingerprint(state)
+    }
+
+    /**
+     * Folds the latest per-stop progress from Firestore into [state].
+     *
+     * Stop statuses change outside this screen — Arrival marks a stop
+     * completed, Map's "Skip" marks it skipped — while this ViewModel keeps
+     * the copy it loaded earlier. Writing that stale copy back (Save Changes,
+     * Resume Trip) used to silently undo that progress. Local edits (order,
+     * visit lengths, name) are kept; only progress comes from the server.
+     */
+    private suspend fun withServerProgress(state: ItineraryUiState): ItineraryUiState {
+        val id = state.editingItineraryId ?: return state
+        val server = itineraryRepository.getItineraryById(id) ?: return state
+        val serverStatus = server.stops.associate { "${it.refType}:${it.refId}" to it.status }
+        return state.copy(
+            generatedStops = state.generatedStops.map { stop ->
+                serverStatus["${stop.refType}:${stop.refId}"]?.let { stop.copy(status = it) } ?: stop
+            },
+            itineraryStatus = server.status,
+            startedAt = server.startedAt ?: state.startedAt,
+            completedAt = server.completedAt,
+            deleteAt = server.deleteAt
+        )
+    }
+
+    /**
+     * Called when the Itinerary tab is shown again: brings an open trip's
+     * progress (Done badges, Resume vs Start) up to date with what happened
+     * on the Map/Arrival screens in the meantime.
+     */
+    fun refreshOpenItineraryProgress() {
+        val before = _uiState.value
+        if (!before.isBuilderActive || before.builderStep != BuilderStep.ROUTE_OVERVIEW) return
+        if (before.editingItineraryId == null || before.isSaving) return
+
+        viewModelScope.launch {
+            val merged = withServerProgress(_uiState.value)
+            val current = _uiState.value
+            // Only apply if the visitor hasn't switched itineraries meanwhile.
+            if (current.editingItineraryId != merged.editingItineraryId) return@launch
+            val statusByKey = merged.generatedStops.associate { "${it.refType}:${it.refId}" to it.status }
+            val updatedStops = current.generatedStops.map { stop ->
+                statusByKey["${stop.refType}:${stop.refId}"]?.let { stop.copy(status = it) } ?: stop
+            }
+            _uiState.value = current.copy(
+                generatedStops = updatedStops,
+                itineraryStatus = merged.itineraryStatus,
+                startedAt = merged.startedAt,
+                completedAt = merged.completedAt,
+                deleteAt = merged.deleteAt,
+                schedule = ItineraryPlanner.buildSchedule(updatedStops, current.routePath)
+            )
+        }
+    }
+
+    private val _uiState = MutableStateFlow(restoredWizardState())
     val uiState: StateFlow<ItineraryUiState> = _uiState.asStateFlow()
+
+    init {
+        // Mirror the wizard's selections into the saved state so a new,
+        // not-yet-saved itinerary survives the app being killed in the
+        // background — the visitor's picks are only dropped when they
+        // cancel, save or start the trip themselves.
+        viewModelScope.launch {
+            _uiState.collect { state -> persistWizardState(state) }
+        }
+        if (_uiState.value.isBuilderActive) loadCatalogIfNeeded()
+    }
+
+    private fun persistWizardState(state: ItineraryUiState) {
+        // Only an unsaved new build needs this; a saved itinerary is
+        // reopened from Firestore.
+        val keep = state.isBuilderActive && state.editingItineraryId == null
+        savedStateHandle[KEY_WIZARD_ACTIVE] = keep
+        if (!keep) return
+        savedStateHandle[KEY_WIZARD_STEP] = state.builderStep.name
+        savedStateHandle[KEY_WIZARD_SITES] = ArrayList(state.selectedSiteIds)
+        savedStateHandle[KEY_WIZARD_INTERESTS] = ArrayList(state.selectedInterestCategories)
+        savedStateHandle[KEY_WIZARD_RECOMMENDATIONS] = ArrayList(state.selectedRecommendationIds)
+        savedStateHandle[KEY_WIZARD_NAME] = state.itineraryName
+    }
+
+    private fun restoredWizardState(): ItineraryUiState {
+        if (savedStateHandle.get<Boolean>(KEY_WIZARD_ACTIVE) != true) return ItineraryUiState()
+        val step = savedStateHandle.get<String>(KEY_WIZARD_STEP)
+            ?.let { name -> BuilderStep.values().firstOrNull { it.name == name } }
+            ?: BuilderStep.SELECT_SITES
+        return ItineraryUiState(
+            isBuilderActive = true,
+            // Recommendations and the built route are derived from the
+            // catalog, which isn't loaded yet after a restore, so resume at
+            // the last step that only needs the saved selections.
+            builderStep = if (step == BuilderStep.SELECT_SITES) step else BuilderStep.SELECT_INTERESTS,
+            selectedSiteIds = savedStateHandle.get<ArrayList<String>>(KEY_WIZARD_SITES).orEmpty().toSet(),
+            selectedInterestCategories = savedStateHandle.get<ArrayList<String>>(KEY_WIZARD_INTERESTS).orEmpty().toSet(),
+            selectedRecommendationIds = savedStateHandle.get<ArrayList<String>>(KEY_WIZARD_RECOMMENDATIONS).orEmpty().toSet(),
+            itineraryName = savedStateHandle.get<String>(KEY_WIZARD_NAME).orEmpty()
+        )
+    }
 
     // ----- Saved itineraries list -----
 
-    fun loadSavedItineraries() {
+    /**
+     * Opens a saved itinerary by id — for entry points (Home's "Resume Trip")
+     * that know which trip but don't hold the loaded object.
+     */
+    fun openSavedItineraryById(documentId: String) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoadingSavedList = true)
-            val itineraries = itineraryRepository.getItinerariesForCurrentUser()
+            val itinerary = _uiState.value.savedItineraries.firstOrNull { it.documentId == documentId }
+                ?: itineraryRepository.getItineraryById(documentId)
+            if (itinerary != null) {
+                openSavedItinerary(itinerary)
+            } else {
+                _uiState.value = _uiState.value.copy(
+                    errorMessage = "That trip couldn't be loaded. Check your connection and try again."
+                )
+            }
+        }
+    }
+
+    /**
+     * [autoResume]: if true, and the builder isn't already open, an
+     * IN_PROGRESS or PAUSED itinerary is reopened straight into its route
+     * overview instead of leaving the visitor on the plain saved list —
+     * openSavedItinerary resumes at the first incomplete stop, never back
+     * at Stop 1.
+     *
+     * NOT wired to opening the Itinerary tab (see ExploreScreen) — it used
+     * to be, but that meant every tap of the tab's nav-bar icon jumped
+     * straight past the saved list into whichever trip was IN_PROGRESS/
+     * PAUSED, with no way to actually see or manage the list (bulk-select,
+     * sort, delete) while a trip was active. Resuming a trip is reachable
+     * instead through Home's "Continue Your Trip" card, or by tapping that
+     * itinerary's own card in the list, both of which call
+     * [openSavedItinerary] directly. Saving a draft still calls this (with
+     * the default false) purely to refresh the list.
+     */
+    fun loadSavedItineraries(autoResume: Boolean = false) {
+        viewModelScope.launch {
+            // Full-screen spinner only when there's nothing to show yet;
+            // returning to the tab refreshes the list in place.
+            if (_uiState.value.savedItineraries.isEmpty()) {
+                _uiState.value = _uiState.value.copy(isLoadingSavedList = true)
+            }
+            // null = couldn't be read at all (no connection and nothing
+            // cached yet). Keep whatever is already listed rather than
+            // blanking it — a failed refresh isn't "you have no trips".
+            val loaded = itineraryRepository.loadItinerariesForCurrentUser()
+            val itineraries = loaded ?: _uiState.value.savedItineraries
             _uiState.value = _uiState.value.copy(
                 isLoadingSavedList = false,
-                savedItineraries = itineraries
+                savedItineraries = itineraries,
+                isOffline = !hasInternet(),
+                savedListLoadFailed = loaded == null
             )
+
+            if (autoResume && !_uiState.value.isBuilderActive) {
+                itineraries.firstOrNull {
+                    it.status == ItineraryStatus.IN_PROGRESS || it.status == ItineraryStatus.PAUSED
+                }?.let { openSavedItinerary(it) }
+            }
         }
+    }
+
+    private fun hasInternet(): Boolean {
+        val manager = getApplication<Application>()
+            .getSystemService(android.net.ConnectivityManager::class.java) ?: return true
+        val capabilities = manager.getNetworkCapabilities(manager.activeNetwork) ?: return false
+        return capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
     fun deleteItinerary(documentId: String) {
         viewModelScope.launch {
             if (itineraryRepository.deleteItinerary(documentId)) {
+                // Deleting the trip that's being navigated ends that session,
+                // so Map/Arrival stop treating arrivals as part of it.
+                if (ActiveItineraryTrip.isActiveFor(documentId)) ActiveItineraryTrip.clear()
                 _uiState.value = _uiState.value.copy(
                     savedItineraries = _uiState.value.savedItineraries.filter {
                         it.documentId != documentId
+                    }
+                )
+            }
+        }
+    }
+
+    /**
+     * Bulk delete from the saved-itineraries list's long-press multi-select
+     * ("Select All" / individually checked items). Deletes run concurrently
+     * rather than one at a time, and whichever ones actually succeed are
+     * removed from the list — one failed delete doesn't block or roll back
+     * the rest, same spirit as the single-item [deleteItinerary] just being
+     * silently a no-op on failure.
+     */
+    fun deleteItineraries(documentIds: Set<String>) {
+        if (documentIds.isEmpty()) return
+        viewModelScope.launch {
+            val deletedIds = coroutineScope {
+                documentIds
+                    .map { id -> async { if (itineraryRepository.deleteItinerary(id)) id else null } }
+                    .awaitAll()
+                    .filterNotNull()
+                    .toSet()
+            }
+            if (deletedIds.isNotEmpty()) {
+                deletedIds.forEach { id ->
+                    if (ActiveItineraryTrip.isActiveFor(id)) ActiveItineraryTrip.clear()
+                }
+                _uiState.value = _uiState.value.copy(
+                    savedItineraries = _uiState.value.savedItineraries.filter {
+                        it.documentId !in deletedIds
                     }
                 )
             }
@@ -222,7 +466,7 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
             selectedSiteIds = emptySet(),
             selectedInterestCategories = emptySet(),
             recommendedPlaces = emptyList(),
-            dismissedRecommendationIds = emptySet(),
+            selectedRecommendationIds = emptySet(),
             generatedStops = emptyList(),
             totalDistanceMeters = 0.0,
             totalWalkingMinutes = 0,
@@ -232,15 +476,17 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
             isLoadingRoutePath = false,
             routeIsApproximate = false,
             startTimeMinutes = DEFAULT_START_MINUTES,
-            completedStopIds = emptySet(),
-            itineraryStatus = "planned",
+            itineraryStatus = ItineraryStatus.PLANNED,
             startedAt = null,
             completedAt = null,
             deleteAt = null,
             schedule = emptyList(),
             errorMessage = null,
+            infoMessage = null,
             previewTarget = null
         )
+
+        savedFingerprint = null
 
         loadCatalogIfNeeded()
     }
@@ -252,7 +498,11 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
             .firstOrNull { it.wireValue == itinerary.travelMode }
             ?: TravelMode.WALKING
 
-        val stops = itinerary.stops.sortedBy { it.order }
+        // distinctBy guards the timeline's LazyColumn, whose keys must be
+        // unique — an older document with a repeated stop would crash it.
+        val stops = itinerary.stops
+            .sortedBy { it.order }
+            .distinctBy { "${it.refType}:${it.refId}" }
 
         _uiState.value = _uiState.value.copy(
             isBuilderActive = true,
@@ -267,15 +517,17 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
             routePath = null,
             routeIsApproximate = false,
             startTimeMinutes = itinerary.startTimeMinutes,
-            completedStopIds = itinerary.completedStopIds.toSet(),
             itineraryStatus = itinerary.status,
             startedAt = itinerary.startedAt,
             completedAt = itinerary.completedAt,
             deleteAt = itinerary.deleteAt,
             schedule = ItineraryPlanner.buildSchedule(stops, null),
             errorMessage = null,
+            infoMessage = null,
             previewTarget = null
         )
+
+        savedFingerprint = fingerprint(_uiState.value)
 
         loadCatalogIfNeeded()
 
@@ -393,17 +645,21 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
             excludeIds = state.selectedSiteIds
         )
 
+        // Nothing is pre-selected. Picks made on an earlier visit to this
+        // step are kept, as long as that place is still being recommended.
+        val stillRecommended = recommendations.map { it.documentId }.toSet()
+
         _uiState.value = state.copy(
             builderStep = BuilderStep.RECOMMENDATIONS,
             recommendedPlaces = recommendations,
-            dismissedRecommendationIds = emptySet()
+            selectedRecommendationIds = state.selectedRecommendationIds.intersect(stillRecommended)
         )
     }
 
-    fun toggleRecommendationDismissed(placeId: String) {
-        val current = _uiState.value.dismissedRecommendationIds
+    fun toggleRecommendationSelected(placeId: String) {
+        val current = _uiState.value.selectedRecommendationIds
         _uiState.value = _uiState.value.copy(
-            dismissedRecommendationIds = if (placeId in current) current - placeId else current + placeId
+            selectedRecommendationIds = if (placeId in current) current - placeId else current + placeId
         )
     }
 
@@ -415,6 +671,38 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.value = _uiState.value.copy(builderStep = BuilderStep.SELECT_INTERESTS)
     }
 
+    /**
+     * One step back through the builder — what system Back and every
+     * in-screen back arrow do. Selections are kept at every step; only the
+     * first step (or a saved itinerary's overview) leaves the builder.
+     *
+     * Returns false when there's no earlier step, so the caller decides
+     * how to leave (the overview asks first if there are unsaved edits).
+     */
+    fun stepBack(): Boolean {
+        val state = _uiState.value
+        if (!state.isBuilderActive) return false
+        when (state.builderStep) {
+            BuilderStep.SELECT_SITES -> return false
+            BuilderStep.SELECT_INTERESTS -> backToSites()
+            BuilderStep.RECOMMENDATIONS -> backToInterests()
+            BuilderStep.ROUTE_OVERVIEW -> {
+                // A saved itinerary opens straight at the overview; there
+                // is no wizard behind it to go back to.
+                if (state.editingItineraryId != null) return false
+                routePathJob?.cancel()
+                // Step 3 is only reachable with interests picked; without
+                // any, the visitor came straight from step 2.
+                if (state.selectedInterestCategories.isEmpty()) {
+                    backToInterests()
+                } else {
+                    goToRecommendationsStep()
+                }
+            }
+        }
+        return true
+    }
+
     // ----- Step 4: route generation -----
 
     @SuppressLint("MissingPermission")
@@ -422,14 +710,27 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
 
         val state = _uiState.value
 
-        viewModelScope.launch {
+        // "Continue Without Interests" has no spinner of its own, so a quick
+        // double tap used to launch two route builds. Set the flag before
+        // launching so the second tap is ignored.
+        if (state.isGeneratingRoute) return
 
-            _uiState.value = _uiState.value.copy(isGeneratingRoute = true, errorMessage = null)
+        _uiState.value = state.copy(isGeneratingRoute = true, errorMessage = null)
+
+        viewModelScope.launch {
 
             val selectedSites = state.allSites.filter { it.documentId in state.selectedSiteIds }
 
-            val keptRecommendations = state.recommendedPlaces.filter {
-                it.documentId !in state.dismissedRecommendationIds
+            // Recommendations only apply when interests are still selected.
+            // Visiting step 3, going back, and clearing every interest used
+            // to leave the old recommendedPlaces in state, and they were
+            // silently added to the route anyway.
+            val keptRecommendations = if (state.selectedInterestCategories.isEmpty()) {
+                emptyList()
+            } else {
+                state.recommendedPlaces.filter {
+                    it.documentId in state.selectedRecommendationIds
+                }
             }
 
             val siteStops = selectedSites.mapNotNull { site ->
@@ -466,7 +767,7 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
                 )
             }
 
-            val allStops = siteStops + placeStops
+            val allStops = (siteStops + placeStops).distinctBy { "${it.refType}:${it.refId}" }
 
             if (allStops.isEmpty()) {
                 _uiState.value = _uiState.value.copy(
@@ -498,73 +799,50 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /**
-     * Re-runs the optimizer over the current stops. Exposed as "Optimize
-     * order" on the overview — a deliberate action, never automatic, so a
-     * user who has hand-arranged their day doesn't have it silently undone.
-     */
-    fun optimizeStopOrder() {
-
-        val state = _uiState.value
-
-        if (state.generatedStops.size < 2) return
-
-        viewModelScope.launch {
-
-            _uiState.value = _uiState.value.copy(isGeneratingRoute = true)
-
-            val start = resolveStartPoint()
-
-            val optimized = ItineraryPlanner.optimizeRoute(
-                start.latitude,
-                start.longitude,
-                state.generatedStops
-            )
-
-            _uiState.value = _uiState.value.copy(
-                isGeneratingRoute = false,
-                generatedStops = optimized.orderedStops,
-                totalDistanceMeters = optimized.totalDistanceMeters,
-                totalWalkingMinutes = optimized.totalWalkingMinutes,
-                totalVisitMinutes = optimized.totalVisitMinutes,
-                usedFallbackLocation = start.isFallback,
-                routePath = null,
-                schedule = ItineraryPlanner.buildSchedule(optimized.orderedStops, null)
-            )
-
-            refreshRoutePath()
-        }
+    fun clearInfoMessage() {
+        _uiState.value = _uiState.value.copy(infoMessage = null)
     }
-
-    /** Kept for older call sites; same behaviour as [optimizeStopOrder]. */
-    fun regenerateRoute() = optimizeStopOrder()
 
     /** Saves first, then starts or resumes at the first incomplete stop. */
     fun beginTrip(onReady: (String) -> Unit) {
-        val currentState = _uiState.value
-        if (currentState.generatedStops.isEmpty() || currentState.isSaving) return
+        val initialState = _uiState.value
+        if (initialState.generatedStops.isEmpty() || initialState.isSaving) return
 
-        // Starting an already completed itinerary means taking it again.
-        val resetState = if (
-            currentState.generatedStops.all { it.refId in currentState.completedStopIds }
-        ) {
-            currentState.copy(
-                completedStopIds = emptySet(),
-                itineraryStatus = "planned",
-                startedAt = null,
-                completedAt = null,
-                deleteAt = null
-            )
-        } else {
-            currentState
-        }
-
-        val state = resetState.copy(
-            itineraryStatus = "in_progress",
-            startedAt = resetState.startedAt ?: Date()
-        )
+        // Flag the save straight away so a double tap can't start (and
+        // write) the trip twice before the coroutine gets going.
+        _uiState.value = initialState.copy(isSaving = true, errorMessage = null)
 
         viewModelScope.launch {
+
+            // Pick up any progress made since this screen loaded the trip.
+            val currentState = withServerProgress(_uiState.value)
+
+            // Starting an already-finished itinerary means taking it again —
+            // every stop goes back to PENDING rather than staying resolved.
+            val alreadyFinished = currentState.generatedStops.isNotEmpty() &&
+                currentState.generatedStops.all { StopStatus.isResolved(it.status) }
+
+            val resetState = if (alreadyFinished) {
+                currentState.copy(
+                    generatedStops = currentState.generatedStops.map { it.copy(status = StopStatus.PENDING) },
+                    itineraryStatus = ItineraryStatus.PLANNED,
+                    startedAt = null,
+                    completedAt = null,
+                    deleteAt = null
+                )
+            } else {
+                currentState
+            }
+
+            // Resuming = some stops already done on a trip that isn't finished.
+            val isResuming = !alreadyFinished &&
+                currentState.generatedStops.any { it.status != StopStatus.PENDING }
+
+            val state = resetState.copy(
+                itineraryStatus = ItineraryStatus.IN_PROGRESS,
+                startedAt = resetState.startedAt ?: Date()
+            )
+
             _uiState.value = state.copy(isSaving = true, errorMessage = null)
 
             val itinerary = itineraryFrom(state)
@@ -586,20 +864,71 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
                 return@launch
             }
 
+            // Created and started in one go: still offer the trip's AR downloads.
+            if (state.editingItineraryId == null) {
+                TripPrep.onItineraryCreated(
+                    getApplication(),
+                    state.generatedStops.filter { it.refType == "site" }.map { it.refId }
+                )
+            }
+
+            // Only one itinerary is ever IN_PROGRESS at a time — a trip
+            // already under way gets paused (not lost) rather than left to
+            // silently conflict with this one.
+            val otherActive = itineraryRepository.getActiveItinerary()
+            if (otherActive != null && otherActive.documentId != documentId) {
+                itineraryRepository.pauseItinerary(otherActive.documentId)
+                if (ActiveItineraryTrip.isActiveFor(otherActive.documentId)) {
+                    ActiveItineraryTrip.clear()
+                }
+            }
+
             _uiState.value = _uiState.value.copy(
                 isSaving = false,
                 editingItineraryId = documentId,
-                itineraryStatus = "in_progress"
+                itineraryStatus = ItineraryStatus.IN_PROGRESS
             )
 
-            ActiveItineraryTrip.start(
+            savedFingerprint = fingerprint(_uiState.value)
+
+            val firstStop = ActiveItineraryTrip.start(
                 documentId = documentId,
                 name = state.itineraryName,
                 orderedStops = state.generatedStops,
-                completedStopIds = state.completedStopIds,
                 startedAtMillis = timestampMillis(state.startedAt) ?: System.currentTimeMillis()
-            )?.refId?.let(onReady)
+            ) ?: return@launch
+
+            announceTripStart(state, firstStop, isResuming)
+
+            onReady(firstStop.refId)
         }
+    }
+
+    /**
+     * Spoken cue that the trip is now live, so the visitor knows it started
+     * even with the phone already in their pocket. Uses the same process-wide
+     * TTS engine as turn-by-turn guidance, which outlives the screen change
+     * to the Map right after, so the line isn't cut off. Fails silently on a
+     * device with no TTS engine.
+     */
+    private fun announceTripStart(
+        state: ItineraryUiState,
+        firstStop: ItineraryStop,
+        isResuming: Boolean
+    ) {
+        val tripName = state.itineraryName.ifBlank { "your Intramuros trip" }
+        val remaining = state.generatedStops.count { !StopStatus.isResolved(it.status) }
+        val stopsText = if (remaining == 1) "1 stop" else "$remaining stops"
+
+        val line = if (isResuming) {
+            "Welcome back. Resuming $tripName. $stopsText to go. " +
+                "Your next stop is ${firstStop.name}."
+        } else {
+            "Your trip has started. $tripName, with $stopsText planned. " +
+                "Your first stop is ${firstStop.name}. Enjoy exploring Intramuros!"
+        }
+
+        VoiceGuidanceManager.getInstance(getApplication()).speak(line)
     }
 
     // ----- Manual editing on the overview -----
@@ -685,6 +1014,9 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
      * straight-line estimate fills in immediately — so this only ever
      * upgrades the display, and a failure leaves the estimate in place.
      */
+    /** "Retry" on the no-route notice. Failed legs aren't cached, so only they are fetched again. */
+    fun retryRoutePath() = refreshRoutePath()
+
     private fun refreshRoutePath() {
 
         routePathJob?.cancel()
@@ -692,10 +1024,15 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
         val stops = _uiState.value.generatedStops
 
         if (stops.size < 2) {
+            // No legs left to walk. The totals used to keep the previous
+            // route's distance and time after removing stops down to one.
             _uiState.value = _uiState.value.copy(
                 routePath = null,
                 isLoadingRoutePath = false,
                 routeIsApproximate = false,
+                totalDistanceMeters = 0.0,
+                totalWalkingMinutes = 0,
+                totalVisitMinutes = stops.sumOf { it.estimatedVisitMinutes },
                 schedule = ItineraryPlanner.buildSchedule(stops, null)
             )
             return
@@ -705,12 +1042,32 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
 
         routePathJob = viewModelScope.launch {
 
+            val thisJob = coroutineContext[kotlinx.coroutines.Job]
+
             _uiState.value = _uiState.value.copy(isLoadingRoutePath = true)
 
-            val path = routePathRepository.getPath(
-                orderedPoints = stops.map { LatLng(it.latitude, it.longitude) },
-                mode = mode
-            )
+            val path = try {
+                routePathRepository.getPath(
+                    orderedPoints = stops.map { LatLng(it.latitude, it.longitude) },
+                    mode = mode,
+                    siteIds = stops.map { if (it.refType == "site") it.refId else null }
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            } finally {
+                // The "loading route" pill used to stay on screen whenever
+                // this ended any way other than the happy path — an error, a
+                // reorder mid-request, or a cancel that no new request
+                // replaced. Whoever finishes LAST clears it (a newer request
+                // still running keeps it up).
+                if (routePathJob === thisJob || routePathJob?.isActive != true) {
+                    _uiState.value = _uiState.value.copy(isLoadingRoutePath = false)
+                }
+            }
+
+            if (path == null) return@launch
 
             val current = _uiState.value
 
@@ -827,7 +1184,7 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
             }
 
             StopPreviewMode.RECOMMENDATION -> {
-                toggleRecommendationDismissed(target.refId)
+                toggleRecommendationSelected(target.refId)
             }
 
             StopPreviewMode.ADD_TO_ROUTE -> {
@@ -938,7 +1295,7 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
         totalVisitMinutes = state.totalVisitMinutes,
         travelMode = state.travelMode.wireValue,
         startTimeMinutes = state.startTimeMinutes,
-        completedStopIds = state.completedStopIds.toList(),
+        completedStopIds = state.generatedStops.filter { it.status == StopStatus.COMPLETED }.map { it.refId },
         status = state.itineraryStatus,
         startedAt = state.startedAt,
         completedAt = state.completedAt,
@@ -953,26 +1310,77 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun saveItinerary(onSaved: () -> Unit) {
 
-        val state = _uiState.value
+        val initialState = _uiState.value
 
-        if (state.generatedStops.isEmpty()) {
-            _uiState.value = state.copy(errorMessage = "Add at least one stop before saving.")
+        // A double tap used to create the same new itinerary twice.
+        if (initialState.isSaving) return
+
+        if (initialState.generatedStops.isEmpty()) {
+            _uiState.value = initialState.copy(errorMessage = "Add at least one stop before saving.")
             return
         }
 
+        _uiState.value = initialState.copy(isSaving = true, errorMessage = null)
+
         viewModelScope.launch {
 
-            _uiState.value = _uiState.value.copy(isSaving = true, errorMessage = null)
+            // Don't overwrite progress recorded elsewhere since this loaded.
+            val state = withServerProgress(_uiState.value)
 
             val itinerary = itineraryFrom(state)
 
-            val success = if (state.editingItineraryId != null) {
-                itineraryRepository.updateItinerary(state.editingItineraryId, itinerary)
+            val savedId = if (state.editingItineraryId != null) {
+                state.editingItineraryId.takeIf {
+                    itineraryRepository.updateItinerary(it, itinerary)
+                }
             } else {
-                itineraryRepository.createItinerary(itinerary) != null
+                itineraryRepository.createItinerary(itinerary)
+            }
+            val success = savedId != null
+
+            if (savedId != null) {
+                // Show the saved trip in the list straight away. The refresh
+                // below replaces it with the stored copy, but offline (or on a
+                // slow connection) that can take a while, and the list used to
+                // look as if nothing had been saved.
+                val existing = _uiState.value.savedItineraries
+                val previous = existing.firstOrNull { it.documentId == savedId }
+                val now = Timestamp.now()
+                val savedCopy = itinerary.copy(
+                    documentId = savedId,
+                    userId = FirebaseAuth.getInstance().currentUser?.uid.orEmpty(),
+                    createdAt = previous?.createdAt ?: now,
+                    updatedAt = now
+                )
+                _uiState.value = _uiState.value.copy(
+                    savedItineraries = if (previous != null) {
+                        existing.map { if (it.documentId == savedId) savedCopy else it }
+                    } else {
+                        existing + savedCopy
+                    }
+                )
             }
 
             if (success) {
+                // A new itinerary: offer to download the AR of its sites
+                // that aren't on the phone yet ("Prepare for your trip").
+                if (state.editingItineraryId == null) {
+                    TripPrep.onItineraryCreated(
+                        getApplication(),
+                        state.generatedStops.filter { it.refType == "site" }.map { it.refId }
+                    )
+                }
+                savedFingerprint = fingerprint(state)
+                // A trip that's under way keeps navigating the saved order.
+                val docId = state.editingItineraryId
+                if (docId != null && ActiveItineraryTrip.isActiveFor(docId)) {
+                    ActiveItineraryTrip.start(
+                        documentId = docId,
+                        name = state.itineraryName,
+                        orderedStops = state.generatedStops,
+                        startedAtMillis = timestampMillis(state.startedAt) ?: System.currentTimeMillis()
+                    )
+                }
                 _uiState.value = _uiState.value.copy(isSaving = false, isBuilderActive = false)
                 loadSavedItineraries()
                 onSaved()
@@ -989,3 +1397,10 @@ class ItineraryViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.value = _uiState.value.copy(errorMessage = null)
     }
 }
+
+private const val KEY_WIZARD_ACTIVE = "itinerary_wizard_active"
+private const val KEY_WIZARD_STEP = "itinerary_wizard_step"
+private const val KEY_WIZARD_SITES = "itinerary_wizard_sites"
+private const val KEY_WIZARD_INTERESTS = "itinerary_wizard_interests"
+private const val KEY_WIZARD_RECOMMENDATIONS = "itinerary_wizard_recommendations"
+private const val KEY_WIZARD_NAME = "itinerary_wizard_name"

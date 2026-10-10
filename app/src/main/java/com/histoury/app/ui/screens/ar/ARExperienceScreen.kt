@@ -1,5 +1,10 @@
 package com.histoury.app.ui.screens.ar
 
+import com.histoury.app.ui.tutorial.TutorialStep
+import com.histoury.app.ui.tutorial.TutorialTour
+import com.histoury.app.ui.tutorial.tutorialTarget
+import com.histoury.app.navigation.safePopBackStack
+import com.histoury.app.navigation.navigateSafely
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
@@ -8,7 +13,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -17,26 +21,47 @@ import android.hardware.SensorManager
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
+import android.graphics.BitmapShader
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.RadialGradient
+import android.graphics.Rect
 import android.graphics.Shader
+import android.location.Location
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.PixelCopy
 import android.view.ViewGroup
 import android.view.View
 import android.view.SurfaceView
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Canvas as ComposeCanvas
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.expandVertically
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,20 +77,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -76,7 +102,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -92,16 +121,15 @@ import androidx.compose.ui.unit.IntSize
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import com.google.ar.core.Anchor
-import com.google.ar.core.AugmentedImage
-import com.google.ar.core.AugmentedImageDatabase
 import com.google.ar.core.Config
+import com.google.android.filament.Viewport
 import com.google.ar.core.Plane
 import com.google.ar.core.Pose
 import com.google.ar.core.Session
-import com.histoury.app.data.offline.OfflineStore
 import com.histoury.app.data.viewmodel.ArExperienceViewModel
 import com.histoury.app.data.viewmodel.ArStage
 import com.histoury.app.data.viewmodel.ArUiState
+import com.histoury.app.navigation.Routes
 import com.histoury.app.theme.SurfaceSoft
 import com.histoury.app.theme.AccentGold
 import com.histoury.app.theme.CardSurface
@@ -116,37 +144,30 @@ import io.github.sceneview.model.ModelInstance
 import io.github.sceneview.model.model
 import io.github.sceneview.node.ModelNode
 import io.github.sceneview.rememberEngine
+import io.github.sceneview.rememberEnvironmentLoader
+import io.github.sceneview.rememberMainLightNode
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import dev.romainguy.kotlin.math.Float3
+import dev.romainguy.kotlin.math.Float4
+import dev.romainguy.kotlin.math.Quaternion
 import io.github.sceneview.rememberModelLoader
 import io.github.sceneview.rememberNodes
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 import java.nio.ByteBuffer
-import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.sin
 import kotlin.math.sqrt
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import com.histoury.app.data.model.HistoricalSite
-import com.histoury.app.data.model.ArReferenceImage
-import com.histoury.app.data.model.referenceImages
-import com.histoury.app.data.model.structureHeightFraction
 import com.histoury.app.data.offline.ArModelCache
-import com.histoury.app.data.viewmodel.GeoStatus
-import com.histoury.app.data.viewmodel.PlacementSource
-import com.google.ar.core.Earth
-import com.google.ar.core.GeospatialPose
 import com.google.ar.core.TrackingState
 import android.content.Intent
 import android.net.Uri
@@ -158,59 +179,55 @@ import com.histoury.app.data.viewmodel.SiteDetailsTab
 import com.histoury.app.ui.components.rememberVoiceoverController
 import com.histoury.app.ui.components.SiteContentTabBody
 import com.histoury.app.ui.components.SiteContentTabRow
-import com.histoury.app.data.repository.GeofenceRepository
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import kotlinx.coroutines.tasks.await
 import io.github.sceneview.math.Scale
 
 /**
  * The "Travel Back in Time" screen.
  *
- * Point the camera at a structure and the historical version of it appears
- * standing in the same place, at the same size, aligned to the real thing.
+ * Stand at a heritage site, point the camera at the ground, and place the
+ * historical structure where you want it — then walk around it, step inside
+ * it, and photograph it.
  *
- * Positioning uses whichever method the admin panel set for the site
- * ([HistoricalSite.arAnchorMode]):
+ * TWO RESPONSIBILITIES, KEPT APART. This is the design rule the screen is
+ * built around:
  *
- *   Image recognition  ARCore matches the camera feed against the site's
- *                      reference photos (one or several — each with its own
- *                      placement) and reports where the photographed
- *                      structure is. Measured against the very thing the
- *                      model replaces, and indifferent to GPS quality.
+ *   The geofence decides WHETHER this site's AR may run.
+ *   The visitor decides WHERE the structure stands.
  *
- *   Geospatial         The model is pinned to a latitude/longitude and
- *                      compass heading on a terrain anchor, once ARCore has
- *                      localised the phone accurately enough. No photo
- *                      needed, but it depends on a good fix.
+ * Nothing crosses that line. The site's latitude and longitude are used to
+ * confirm the visitor is actually at the site — checked against the geofence
+ * belonging to that site's own id, so being inside Fort Santiago never
+ * unlocks Manila Cathedral — and then they are done. No coordinate ever
+ * reaches the model's transform.
  *
- *   Both               Whichever locks on first places the model.
+ * WHAT USED TO BE HERE. Placement was previously automatic, by ARCore
+ * Geospatial (VPS, terrain anchors, latitude/longitude) or by Augmented
+ * Image recognition of reference photos, with fallback logic between the two
+ * and hand placement as a last resort. All of it has been removed. Both
+ * methods depended on conditions nobody can guarantee on the day — GPS
+ * quality in narrow streets, light and angle on a facade — and when they
+ * were wrong they were wrong in the worst way: a structure that looked
+ * placed but sat in the wrong spot, or drifted. Manual placement is cruder
+ * and completely predictable, which on a real site visit is worth more.
  *
- * Geospatial scenes never scan: no reference photo is downloaded and no
- * image database is configured, so the camera goes straight to localising
- * and the model deploys itself once Earth is tracking.
+ * Do not reintroduce either method to solve a placement problem. If a
+ * structure is in the wrong place, the visitor moves it.
  *
- * WORLD-LOCKED: whatever the method, the model is placed exactly once on a
- * world anchor (a session anchor for photos, a terrain anchor for
- * geospatial) and is never moved afterwards. Moving the phone only moves
- * the camera. See the comment above the placement code in ArCameraLayer.
- *
- * Accuracy measures: nothing is placed until the photo's size estimate has
- * settled; the model is levelled so it never leans with a tilted photo
- * estimate; geospatial waits for a precise fix (with a fallback so it still
- * deploys in narrow streets).
+ * WORLD-LOCKED: the structure is placed exactly once, on an ordinary world
+ * anchor from a real detected floor, and is never moved afterwards. Walking
+ * toward it, around it, or through it moves the camera and nothing else. See
+ * the comment above the placement code in ArCameraLayer.
  *
  * The flow:
  *
- *   LOADING_SITE → SEARCHING → ANCHORING → PLACED
- *                      ↓
- *              NOT_RECOGNIZED → MANUAL_ALIGNING → PLACED
- *
- * Recognition depends on light, angle and an unobstructed view, and
- * geospatial on a clear view of the surroundings — none of which can be
- * guaranteed on any particular day. So when it doesn't fire,
- * the screen offers hand placement rather than an apology. It is visibly
- * cruder and it says so, but it always works.
+ *   LOADING_SITE → (geofence check) → MANUAL_ALIGNING → PLACED
+ *                         ↓
+ *                 OUTSIDE_GEOFENCE
  *
  * Written against the SceneView 2.x API: the scene owns a mutable
  * [rememberNodes] list and nodes are added to it imperatively, rather than
@@ -226,6 +243,51 @@ fun ARExperienceScreen(
 ) {
 
     val uiState by viewModel.uiState.collectAsState()
+
+    val ratingPrompt by viewModel.ratingPrompt.collectAsState()
+
+    // Leaving after the model was placed asks for an optional review first.
+    // Submitting, "Not now" or dismissing all pop back to the Site
+    // Information page AR was opened from (it's the only entry point). With
+    // no model placed, Back behaves exactly as before.
+    androidx.activity.compose.BackHandler(
+        enabled = ratingPrompt.modelPlaced && !ratingPrompt.handled && !ratingPrompt.isVisible
+    ) {
+        if (!viewModel.onExitRequested()) navController.safePopBackStack()
+    }
+
+    if (ratingPrompt.isVisible) {
+        val existing = ratingPrompt.existingReview
+        val promptContext = LocalContext.current
+        com.histoury.app.ui.components.RateSiteDialog(
+            title = if (existing != null) {
+                "Update your review?"
+            } else {
+                "How was your visit to ${uiState.site?.siteName ?: "this site"}?"
+            },
+            subtitle = if (existing != null) {
+                "You've already reviewed ${uiState.site?.siteName ?: "this site"}. " +
+                    "Submitting updates that review."
+            } else {
+                "Your review appears in Site Rankings."
+            },
+            initialRating = existing?.rating?.toInt() ?: 0,
+            initialText = existing?.reviewText.orEmpty(),
+            isSubmitting = ratingPrompt.isSubmitting,
+            errorMessage = ratingPrompt.errorMessage,
+            submitLabel = if (existing != null) "Update" else "Submit",
+            onSubmit = { rating, text ->
+                viewModel.submitRating(rating, text) { message ->
+                    android.widget.Toast.makeText(promptContext, message, android.widget.Toast.LENGTH_SHORT).show()
+                    navController.safePopBackStack()
+                }
+            },
+            onDismiss = {
+                viewModel.declineRating()
+                navController.safePopBackStack()
+            }
+        )
+    }
 
     val context = LocalContext.current
 
@@ -249,19 +311,18 @@ fun ARExperienceScreen(
 
     val site = uiState.site
 
-    // The reference photographs, in memory, keyed by their admin-panel id.
-    // ARCore needs these before the session is configured, so unlike the
-    // model they are a prerequisite for showing the camera at all.
-    var referenceBitmaps by remember { mutableStateOf<Map<String, Bitmap>>(emptyMap()) }
-
-    // True once everything the chosen anchoring method(s) need is ready:
-    // photos downloaded for image recognition, location permission for
-    // geospatial.
+    // True once this site's AR is cleared to arm — meaning the visitor has
+    // been confirmed to be standing inside its own geofence. Nothing is
+    // downloaded up front any more: the model loads inside the camera layer,
+    // and there are no reference photos to fetch because nothing is being
+    // recognised.
     var assetsReady by remember { mutableStateOf(false) }
 
-    // Geospatial needs precise location. Visitors normally granted it for
-    // arrival detection long before reaching the AR button, so this is
-    // usually already true and the prompt never shows.
+    // Precise location is needed for exactly ONE thing: proving the visitor
+    // is inside this site's geofence. It never positions the model — see the
+    // note on ArStage. Visitors normally granted it for arrival detection
+    // long before reaching the AR button, so this is usually already true
+    // and the prompt never shows.
     var locationGranted by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
@@ -270,26 +331,53 @@ fun ARExperienceScreen(
         )
     }
     var locationAsked by remember { mutableStateOf(false) }
+    // Refusals of the location prompt on this screen. After the second one
+    // Android stops showing the prompt at all ("Don't ask again"), so "Try
+    // again" then opens the app's settings instead of a prompt that
+    // silently answers "denied".
+    var locationDenials by remember { mutableStateOf(0) }
 
     val locationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         locationGranted = granted
+        if (!granted) locationDenials++
+        locationAsked = true
+    }
+
+    // Coming back from the app's settings page: re-read the real permission
+    // state (it may or may not have been granted there).
+    val locationSettingsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        locationGranted = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
         locationAsked = true
     }
 
     // Whether the device is physically inside THIS site's own geofence.
-    // Recognition is already scoped to this site's own reference photos, but
-    // nothing else re-checks that this is even the right site to be looking
-    // at — a site can get loaded here via a tapped notification, a live
-    // arrival event, or simply mislabeled content, none of which is
-    // re-verified against live location. null = still checking; the camera
-    // only ever starts once this is true, and a false result means
-    // [ArExperienceViewModel.verifyGeofence] has already moved the screen to
-    // ArStage.UNAVAILABLE with an explanation.
+    //
+    // This is now the ONLY gate in front of AR, so it carries weight it
+    // didn't before. A site can be loaded here from a tapped notification, a
+    // live arrival event, a deep link, or content filed under the wrong site
+    // record — none of which prove the visitor is actually standing where
+    // that site is. Location is the one signal not routed through any of
+    // that, and it is checked against the fence belonging to this site's own
+    // id, never against whichever fence happens to be nearest. Two sites a
+    // few minutes' walk apart in Intramuros must never unlock each other.
+    //
+    // null = still checking; the camera only starts once this is true, and
+    // false means the screen has already moved to ArStage.OUTSIDE_GEOFENCE
+    // with an explanation the visitor can act on.
     var geofenceCheckPassed by remember { mutableStateOf<Boolean?>(null) }
 
-    val geofenceRepository = remember { GeofenceRepository() }
+    // Bumped by "Try again" on the outside-site screen, purely to re-key the
+    // gate below so it runs again. Without it that effect's keys are all
+    // unchanged after a refusal — same site, same permission — so nothing
+    // would re-trigger it and the refusal would be final for the life of the
+    // screen, which is precisely what made a single bad fix feel like a lock.
+    var geofenceRetryToken by remember { mutableStateOf(0) }
 
     val fusedLocationClient = remember {
         LocationServices.getFusedLocationProviderClient(context)
@@ -342,7 +430,13 @@ fun ARExperienceScreen(
 
     if (showCameraSettingsExplanation && !cameraGranted) {
         AlertDialog(
-            onDismissRequest = { showCameraSettingsExplanation = false },
+            // Tapping outside used to just hide the dialog, leaving an
+            // endless spinner with no camera and no explanation. It now
+            // means the same as "Not now".
+            onDismissRequest = {
+                showCameraSettingsExplanation = false
+                navController.safePopBackStack()
+            },
             title = { Text("Allow camera access") },
             text = {
                 Text(
@@ -369,7 +463,7 @@ fun ARExperienceScreen(
                 TextButton(
                     onClick = {
                         showCameraSettingsExplanation = false
-                        navController.popBackStack()
+                        navController.safePopBackStack()
                     }
                 ) {
                     Text("Not now")
@@ -382,124 +476,180 @@ fun ARExperienceScreen(
         viewModel.loadSite(siteId)
     }
 
-    // Reference photos, downloaded in parallel. A photo that fails is
-    // skipped rather than failing the whole scene — the others can still be
-    // recognised. Only when none load does image recognition drop out (and
-    // geospatial carries on alone if it's set up).
-    LaunchedEffect(site?.documentId, uiState.useImage) {
+    // The gate: is the visitor standing inside THIS site's own geofence?
+    //
+    // Keyed on locationAsked as well as locationGranted, which matters. The
+    // earlier version keyed only on (site, locationGranted), so a visitor
+    // who declined the permission prompt left geofenceCheckPassed at null
+    // forever — the effect never re-ran, the camera never started, and the
+    // screen sat on a spinner with no message and no way forward but the
+    // back button. A refusal now resolves to a real answer.
+    LaunchedEffect(
+        site?.documentId, locationGranted, locationAsked, geofenceRetryToken,
+        cameraGranted, cameraPermissionAsked
+    ) {
 
-        val currentSite = site ?: return@LaunchedEffect
-        if (!uiState.useImage || referenceBitmaps.isNotEmpty()) return@LaunchedEffect
-
-        val references = currentSite.referenceImages
-
-        val loaded = coroutineScope {
-            references.map { reference ->
-                async {
-                    val bitmap = try {
-                        downloadReferenceImage(context, reference.url)
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Throwable) {
-                        Log.e(
-                            "HistouryAR",
-                            "Could not load reference photo \"${reference.label}\" " +
-                                "for ${currentSite.siteName}",
-                            error
-                        )
-                        null
-                    }
-                    bitmap?.let { reference.id to it }
-                }
-            }.awaitAll().filterNotNull().toMap()
-        }
-
-        if (loaded.isEmpty()) {
-            viewModel.onImageAnchoringUnavailable(
-                "The reference photos for this site couldn't be loaded. " +
-                    "Check your connection and try opening AR again."
-            )
-        } else {
-            referenceBitmaps = loaded
-        }
-    }
-
-    // Ask for precise location when geospatial is in play and it isn't
-    // granted yet. Declining falls back to image recognition when that's
-    // set up too.
-    LaunchedEffect(site?.documentId, uiState.useGeospatial, locationGranted, locationAsked) {
-        if (site == null || !uiState.useGeospatial || locationGranted) return@LaunchedEffect
-        if (!locationAsked) {
-            locationLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-        } else {
-            viewModel.onGeospatialUnavailable(
-                "Placing this structure by location needs precise location " +
-                    "access. Allow it in Settings, then open AR again."
-            )
-        }
-    }
-
-    // Re-verifies, every time the loaded site changes, that the device is
-    // actually standing inside that site's own geofence before AR is allowed
-    // to arm for it. Shares locationAsked/locationLauncher with the
-    // geospatial permission effect above — by the time a visitor reaches
-    // this screen, location access was almost always already granted for
-    // arrival detection, so this rarely has to prompt at all.
-    LaunchedEffect(site?.documentId, locationGranted) {
-
-        val currentSite = site ?: return@LaunchedEffect
+        site ?: return@LaunchedEffect
 
         geofenceCheckPassed = null
 
-        val geofence = try {
-            geofenceRepository.getGeofenceForSite(currentSite.siteId)
-        } catch (e: Exception) {
-            null
+        if (!locationGranted) {
+
+            if (!locationAsked) {
+                // Wait for the camera prompt to be answered first. Both
+                // prompts used to fire at once; Android shows one permission
+                // dialog at a time and answers a second concurrent request
+                // with an automatic "denied", so location was refused
+                // without the visitor ever seeing it. This effect re-runs
+                // (it's keyed on the camera state) once that's settled.
+                if (!cameraGranted && !cameraPermissionAsked) return@LaunchedEffect
+                locationLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                return@LaunchedEffect
+            }
+
+            // Asked and refused. verifyGeofence(null) decides what that
+            // means: a site with no fence is still allowed through, and a
+            // fenced site is blocked with an explanation rather than a
+            // spinner.
+            geofenceCheckPassed = viewModel.verifyGeofence(null)
+            return@LaunchedEffect
         }
 
-        if (geofence == null) {
-            // Nothing to enforce yet for this site — fail open so sites
-            // without a configured geofence keep working as before.
+        // Settle the fence before spending any fixes on it. An unfenced
+        // site still fails open, exactly as before — there is nothing to be
+        // outside of, so there is nothing worth asking the GPS.
+        if (!viewModel.ensureGeofenceResolved()) {
             geofenceCheckPassed = true
             return@LaunchedEffect
         }
 
-        if (!locationGranted) {
-            if (!locationAsked) {
-                locationLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        // Several fixes, not one.
+        //
+        // This is the lock-out fix. Deciding from a single reading made the
+        // gate a coin toss in exactly the conditions the app is used in: one
+        // bad fix beside a stone wall sent a visitor standing in front of
+        // the structure to the "you're outside" screen, which offered no way
+        // back but leaving and re-entering — and then tossed the coin again.
+        //
+        // The first reading that puts them inside wins and the loop stops
+        // there, so the common case still costs one fix and the extra ones
+        // are only spent when the answer was going to be a refusal anyway.
+        var lastUsableFix: Location? = null
+        var inside = false
+
+        for (attempt in 0 until GEOFENCE_GATE_ATTEMPTS) {
+
+            if (attempt > 0) {
+                // Spaced out on purpose. Fixes taken back to back come from
+                // the same satellite geometry and the same reflections off
+                // the same wall, so they repeat one another's error; a few
+                // seconds apart gives the engine time to actually revise.
+                kotlinx.coroutines.delay(GEOFENCE_GATE_RETRY_MS)
             }
-            return@LaunchedEffect
+
+            val fix = freshFix(fusedLocationClient)
+                ?: recentLastLocation(fusedLocationClient)
+                ?: continue
+
+            lastUsableFix = fix
+
+            if (viewModel.isWithinGeofence(fix)) {
+                inside = true
+                break
+            }
         }
 
-        val location = try {
-            fusedLocationClient.lastLocation.await()
-        } catch (e: Exception) {
-            null
-        }
+        geofenceCheckPassed = when {
 
-        geofenceCheckPassed = viewModel.verifyGeofence(location)
+            inside -> true
+
+            // No fix at all is a GPS problem, not a location problem, and
+            // saying "move closer" to somebody already standing there is
+            // both wrong and maddening.
+            lastUsableFix == null -> {
+                viewModel.onLocationUnavailable()
+                false
+            }
+
+            else -> {
+                viewModel.onOutsideGeofence()
+                false
+            }
+        }
     }
 
-    // Start the camera once every enabled method has what it needs.
-    LaunchedEffect(
-        site?.documentId,
-        uiState.useImage,
-        uiState.useGeospatial,
-        referenceBitmaps,
-        locationGranted,
-        geofenceCheckPassed
-    ) {
+    // The boundary watch, for a visitor who walks out mid-session.
+    //
+    // Deliberately slow and deliberately forgiving. A single fix landing
+    // outside the line means nothing — consumer GPS in a walled courtyard
+    // wanders by tens of metres — so it takes several consecutive outside
+    // readings before this concludes anything, and a failed or missing fix
+    // is never counted as evidence of leaving. The cost of being wrong here
+    // is snatching a structure away from someone who is standing right in
+    // front of it, which is far worse than being slow to react.
+    //
+    // Even when it does fire, nothing already placed is disturbed: this only
+    // blocks a NEW placement. See ArUiState.leftSiteArea.
+    LaunchedEffect(geofenceCheckPassed, locationGranted) {
+
+        if (geofenceCheckPassed != true || !locationGranted) return@LaunchedEffect
+        if (!viewModel.hasResolvedGeofence()) return@LaunchedEffect
+
+        var consecutiveOutsideFixes = 0
+
+        // Timestamp of the reading the last decision was made from, so the
+        // same one cannot be counted twice.
+        var lastCountedFixNanos = 0L
+
+        while (true) {
+
+            kotlinx.coroutines.delay(GEOFENCE_WATCH_INTERVAL_MS)
+
+            val fix = freshFix(fusedLocationClient)
+
+            // No fix is not the same as being outside. Indoors, under stone
+            // arches, or with the radio briefly busy, this happens routinely
+            // and must not accumulate towards an exit.
+            if (fix == null) continue
+
+            // Nor is the SAME fix three times the same as three fixes.
+            //
+            // getCurrentLocation is allowed to hand back a recent cached
+            // reading rather than computing a new one, so a single stale fix
+            // taken while walking up to the site could be returned on every
+            // pass and satisfy the confirmation count on its own. The
+            // debounce below is only meaningful if each reading is genuinely
+            // a new observation, so require the clock to have moved.
+            if (fix.elapsedRealtimeNanos == lastCountedFixNanos) continue
+
+            // A fix too vague to locate anyone cannot show they left. It is
+            // still allowed to bring somebody back in below, because that
+            // agrees with the benefit of the doubt the gate already gives.
+            if (!viewModel.isFixTrustworthy(fix) && !viewModel.isWithinGeofence(fix)) continue
+
+            lastCountedFixNanos = fix.elapsedRealtimeNanos
+
+            if (viewModel.isWithinGeofence(fix)) {
+                consecutiveOutsideFixes = 0
+                viewModel.onGeofenceReentered()
+            } else {
+                consecutiveOutsideFixes++
+                if (consecutiveOutsideFixes >= GEOFENCE_EXIT_CONFIRMATIONS) {
+                    viewModel.onSustainedGeofenceExit()
+                }
+            }
+        }
+    }
+
+    // Start the camera once this site's AR is cleared to arm. There is
+    // nothing else to wait for — no photos to download, no localisation to
+    // converge — so the geofence result is the whole condition.
+    LaunchedEffect(site?.documentId, geofenceCheckPassed) {
         if (site == null || assetsReady) return@LaunchedEffect
-        if (!uiState.useImage && !uiState.useGeospatial) return@LaunchedEffect
         if (geofenceCheckPassed != true) return@LaunchedEffect
 
-        val imageReady = !uiState.useImage || referenceBitmaps.isNotEmpty()
-        val geoReady = !uiState.useGeospatial || locationGranted
-
-        if (imageReady && geoReady) {
-            assetsReady = true
-            viewModel.onAssetsReady()
-        }
+        assetsReady = true
+        viewModel.onAssetsReady()
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -518,7 +668,68 @@ fun ARExperienceScreen(
             ArStage.UNAVAILABLE -> {
                 UnavailableState(
                     reason = uiState.unavailableReason,
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.safePopBackStack() },
+                    onRetry = if (uiState.unavailableRetryable) {
+                        { viewModel.loadSite(siteId) }
+                    } else {
+                        null
+                    }
+                )
+            }
+
+            ArStage.OUTSIDE_GEOFENCE -> {
+                OutsideSiteState(
+                    siteName = site?.siteName.orEmpty(),
+                    reason = uiState.outsideGeofenceReason,
+                    onRetry = {
+                        // Order matters: move the stage back to checking
+                        // first so the spinner replaces this screen at once,
+                        // then re-key the gate. The other way round leaves
+                        // the refusal on display while the recheck runs,
+                        // which reads as the button having done nothing.
+                        viewModel.onGeofenceRecheckStarted()
+
+                        locationGranted = ContextCompat.checkSelfPermission(
+                            context, Manifest.permission.ACCESS_FINE_LOCATION
+                        ) == PackageManager.PERMISSION_GRANTED
+
+                        if (!locationGranted) {
+                            if (locationDenials >= 2) {
+                                // Android won't show the prompt again; the
+                                // settings page is the only way to grant it.
+                                locationSettingsLauncher.launch(
+                                    Intent(
+                                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                        Uri.parse("package:${context.packageName}")
+                                    )
+                                )
+                                return@OutsideSiteState
+                            }
+                            // "Try again" used to only re-run the check with
+                            // the permission still refused, so it never
+                            // asked again. Clearing this makes the gate
+                            // show the location prompt once more.
+                            locationAsked = false
+                        }
+
+                        geofenceRetryToken++
+                    },
+                    onViewOnMap = {
+                        // The document id, which is what the Map screen
+                        // loads by. Passing the short site id here opened a
+                        // map saying "This destination could not be found".
+                        // The blocked AR screen is replaced, so Back from
+                        // the map doesn't land on it again.
+                        val target = site?.documentId?.takeIf { it.isNotBlank() }
+                        if (target == null) {
+                            navController.safePopBackStack()
+                        } else {
+                            navController.navigateSafely(Routes.Map.createRoute(target)) {
+                                popUpTo(Routes.ARExperience.route) { inclusive = true }
+                            }
+                        }
+                    },
+                    onClose = { navController.safePopBackStack() }
                 )
             }
 
@@ -542,7 +753,6 @@ fun ARExperienceScreen(
                     ArCameraLayer(
                         uiState = uiState,
                         viewModel = viewModel,
-                        referenceBitmaps = referenceBitmaps,
                         isCapturing = isCapturing,
                         showSiteInfo = showSiteInfo,
                         onShowSiteInfoChange = { showSiteInfo = it },
@@ -589,41 +799,49 @@ fun ARExperienceScreen(
             }
         }
 
-        if (uiState.stage != ArStage.UNAVAILABLE && !isCapturing && pendingCapture == null) {
-            BackButton(onClick = { navController.popBackStack() })
-        }
+        // No floating back button.
+        //
+        // Leaving AR is already a system gesture — the edge swipe, or the
+        // navigation bar on devices that still show one — and this screen
+        // installs no BackHandler, so that path works untouched. A second
+        // way out drawn on top of the camera bought nothing and cost the
+        // corner of the frame, which in a photography screen is the most
+        // valuable corner there is.
+        //
+        // The blocked states keep their own explicit exits (UnavailableState
+        // and OutsideSiteState both carry a Close), because those screens
+        // are not the camera and a dead end with no visible way out is a
+        // different problem from a redundant control.
 
-        // Capture result toast. Auto-clears so it doesn't sit over the scene.
+        // Capture result: auto-clears so it doesn't sit over the scene. It's
+        // drawn in the overlay's bottom stack, just above the shutter.
         uiState.captureMessage?.let { message ->
-
             LaunchedEffect(message) {
                 kotlinx.coroutines.delay(2600)
                 viewModel.clearCaptureMessage()
-            }
-
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 90.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(Color.Black.copy(alpha = 0.75f))
-                    .padding(horizontal = 16.dp, vertical = 9.dp)
-            ) {
-                Text(
-                    text = message,
-                    color = Color.White,
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.Medium
-                )
             }
         }
 
         // The filter picker for the photo just taken. Covers everything else
         // on screen until the visitor saves or discards it.
+        // Back on the photo review closes it (discarding the shot) and
+        // returns to the camera — it used to fall through and close AR
+        // altogether. Composed after the screen's own Back handler, so it
+        // wins while the review is open.
+        androidx.activity.compose.BackHandler(enabled = pendingCapture != null) {
+            pendingCapture = null
+        }
+
         pendingCapture?.let { captured ->
             CaptureReviewSheet(
                 original = captured,
                 isSaving = uiState.isSavingCapture,
+                // Offered, never applied. Original stays selected — the
+                // suggestion is a hint about which look suits this kind of
+                // structure, not a decision taken on the visitor's behalf.
+                suggestedFilter = remember(uiState.site) {
+                    suggestedFilterFor(uiState.site)
+                },
                 onDiscard = { pendingCapture = null },
                 onSave = { filtered ->
                     viewModel.saveCapture(filtered)
@@ -646,9 +864,6 @@ private fun ArCameraLayer(
     showSiteInfo: Boolean,
     onShowSiteInfoChange: (Boolean) -> Unit,
     viewModel: ArExperienceViewModel,
-    // Reference photos keyed by their admin-panel id. Empty when the scene
-    // is placed by geospatial only.
-    referenceBitmaps: Map<String, Bitmap>,
     onCapture: () -> Unit
 ) {
 
@@ -658,97 +873,113 @@ private fun ArCameraLayer(
 
     val modelLoader = rememberModelLoader(engine)
 
+    // Positional ambience read from the model's own `SFX_` nodes — see
+    // ArSpatialAudio. Paused with the screen so a backgrounded app goes
+    // quiet, and released with it.
+    val sceneAudio = remember { ArSpatialAudio(context) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> sceneAudio.pause()
+                Lifecycle.Event.ON_RESUME -> sceneAudio.resume()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            sceneAudio.release()
+        }
+    }
+
+    // The sun. Same intensity SceneView would have used by default, so the
+    // brightness the neutral environment was tuned against is unchanged —
+    // only warmer, and casting shadows, which is what grounds the buildings,
+    // carriages and people on the plaza instead of letting them float on it.
+    // Its direction is set relative to the placed model further down. When
+    // ARCore light estimation is on, the estimated light replaces this one.
+    val sunLight = rememberMainLightNode(engine) {
+        color = SUN_COLOR
+        isShadowCaster = true
+    }
+
+    // ------------------------------------------------ image-based lighting
+    //
+    // This is what was making the reconstruction render far darker in AR
+    // than in the admin preview, and it is not a tuning problem: an AR scene
+    // in SceneView 2.x ships with NO image-based lighting whatsoever.
+    //
+    // A plain SceneView loads `environments/neutral/neutral_ibl.ktx` as its
+    // default environment — that is the soft, even studio light the preview
+    // renders under. ARSceneView deliberately does not. Its init runs
+    // `environment = createAREnvironment(engine)`, which forwards to the
+    // overload whose `indirectLight` parameter defaults to null, so the
+    // neutral IBL the parent had just built is replaced by nothing at all.
+    //
+    // What is left lighting the model is the single default directional
+    // main light. Every surface not facing it falls away to near black, and
+    // the matte correction applied further down (metallic 0, roughness 0.92
+    // — correct for stone and plaster) removes the specular highlights that
+    // would otherwise have lifted those faces. Hence a brown smear with the
+    // roof readable and everything beneath it crushed.
+    //
+    // Turning ARCore's light estimation off could never have fixed this:
+    // there was no neutral environment underneath for it to fall back to.
+    //
+    // So supply one explicitly. It must be passed as the ARScene parameter
+    // below rather than set in onViewCreated — the composable re-assigns
+    // sceneView.environment from that parameter on every update, so anything
+    // set on the view directly is overwritten on the next recomposition.
+    val environmentLoader = rememberEnvironmentLoader(engine)
+
+    // The KTX ships inside the SceneView AAR, so there is nothing to add to
+    // the app's own assets and nothing to download at runtime.
+    //
+    // Skybox stays null, which is what the loader returns when no skybox
+    // buffer is given: an AR scene draws the camera feed where a skybox
+    // would go, and giving it one would black out the real world.
+    //
+    // Environments created through the loader are owned by it and destroyed
+    // when it is, so this needs no DisposableEffect of its own.
+    val arEnvironment = remember(environmentLoader) {
+        runCatching {
+            environmentLoader.createKTX1Environment(
+                iblAssetFile = NEUTRAL_IBL_ASSET
+            )
+        }.getOrElse { error ->
+            // Falling back to an environment with neither IBL nor skybox is
+            // exactly the old behaviour, so a missing asset costs the fix
+            // rather than the screen.
+            Log.w("HistouryAR", "Neutral IBL unavailable; AR will be lit by the main light only", error)
+            environmentLoader.createEnvironment()
+        }
+    }
+
     // The scene graph. In SceneView 2.x nodes are managed by mutating this
     // list, not by declaring composable children.
     val childNodes = rememberNodes()
 
     val site = uiState.site
 
-    // The site's reference photos, primary first, by id — the same ids the
-    // image database uses as names, so a recognised image maps straight
-    // back to its own offsets and rotation.
-    val references = remember(site) { site?.referenceImages.orEmpty() }
-    val referencesById = remember(references) { references.associateBy { it.id } }
-    val primaryReferenceId = references.firstOrNull()?.id
-
     var modelInstance by remember { mutableStateOf<ModelInstance?>(null) }
+
+    /**
+     * Bumped to force a clean reload of the GLB. "Reset Placement" no
+     * longer does (it keeps the loaded model — see resetManualPlacement);
+     * kept as a key of the model-loading effect for a future retry path.
+     */
+    var modelReloadToken by remember { mutableStateOf(0) }
 
     // ----- anchoring bookkeeping -----
 
-    /** What created the current anchor. */
-    var anchorSource by remember { mutableStateOf<PlacementSource?>(null) }
-
-    /** The reference photo the current image anchor was built from. */
-    var anchoredImageId by remember { mutableStateOf<String?>(null) }
-
-    /**
-     * Consecutive frames since the placed structure's reference image last
-     * had ANY tracking reading at all (not even extrapolated), for the
-     * TRACKING_LOST debounce further down. A person walking past, a passing
-     * shadow, or someone stepping close enough that the photo leaves the
-     * frame all drop this to zero-tracking for a moment during completely
-     * normal use; only a run of consecutive misses means recognition has
-     * genuinely lapsed.
-     */
-    var trackingLostFrames by remember { mutableStateOf(0) }
-
-    /** What the model's size is derived from; set when an anchor is made. */
+    /** What the model's size is derived from; set when the anchor is made. */
     var scaleBasis by remember { mutableStateOf<ScaleBasis?>(null) }
-
-    /** Photos ARCore accepted into the image database, and ones it refused. */
-    var registeredImageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var rejectedPhotoLabels by remember { mutableStateOf<List<String>>(emptyList()) }
-    var imageSetupDone by remember { mutableStateOf(false) }
-    var imageFailureReported by remember { mutableStateOf(false) }
-
-    /** Per photo: the settled width estimate, once it has settled. */
-    val lockedWidths = remember { mutableMapOf<String, Float>() }
-
-    /**
-     * Per photo: the settled physical HEIGHT estimate (ARCore's extentZ),
-     * captured at the exact same moment [lockedWidths] locks or relocks.
-     *
-     * Riding on the existing width stabiliser rather than running a second
-     * one: extentX and extentZ come from the same underlying ARCore size
-     * estimate and settle together, so gating on the width's own stability
-     * (unchanged below) is exactly as valid a signal for the height. This is
-     * what the model's scale is now actually derived from — see the scale
-     * LaunchedEffect further down.
-     */
-    val lockedHeights = remember { mutableMapOf<String, Float>() }
-
-    /** Which photo the width stabiliser is currently following. */
-    var stabilizerImageId by remember { mutableStateOf<String?>(null) }
-    var fullTrackingFrames by remember { mutableStateOf(0) }
-    var relockFrames by remember { mutableStateOf(0) }
-
-    /** When Earth tracking started, for the geospatial placement fallback. */
-    var earthTrackingSinceMillis by remember { mutableStateOf(0L) }
-
-    /** True once a geospatial placement has been pinned in the local world frame. */
-    var geoPosePinned by remember { mutableStateOf(false) }
-
-    /**
-     * Terrain anchor requested EARLY — as soon as Earth has any fix — so
-     * Google's ground-height lookup runs while the app is still waiting for
-     * a precise location, instead of after it. Held here, unplaced, until
-     * the location is good enough; then it becomes the model's anchor.
-     */
-    var earlyTerrainAnchor by remember { mutableStateOf<Anchor?>(null) }
-    var lastTerrainRequestMillis by remember { mutableStateOf(0L) }
-
-    // Geospatial
-    var geospatialActive by remember { mutableStateOf(false) }
-    var geospatialUnsupported by remember { mutableStateOf(false) }
-    var geoProblemReported by remember { mutableStateOf(false) }
-    var geoGoodFrames by remember { mutableStateOf(0) }
-    var terrainPending by remember { mutableStateOf(false) }
-    var lastGeoStatusMillis by remember { mutableStateOf(0L) }
-    var geoDebug by remember { mutableStateOf("off") }
 
     var anchor by remember { mutableStateOf<Anchor?>(null) }
 
-    // Prevent the per-frame callback from creating several anchors before
+
+    // Prevents the per-frame callback from creating several anchors before
     // the first one has been attached.
     var anchorCreated by remember { mutableStateOf(false) }
 
@@ -757,27 +988,34 @@ private fun ArCameraLayer(
     // Kept separately so manual adjustments can be applied to it.
     var modelNode by remember { mutableStateOf<ModelNode?>(null) }
 
-    // Manual alignment offsets, relative to the anchor. Untouched when
-    // recognition succeeds.
+    // The model node taken off its anchor by "Reset Placement", waiting to
+    // be attached to the next anchor (one node per loaded model, ever).
+    var retainedModelNode by remember { mutableStateOf<ModelNode?>(null) }
+
+    // The first time a model actually stands in the scene this session —
+    // what makes the visitor eligible for the rating prompt on the way out.
+    //
+    // Keyed on the MODEL NODE being attached, not merely on an anchor: an
+    // anchor is made on the tap even when the GLB never finished loading,
+    // and the review prompt then asked visitors to rate a model they never
+    // saw.
+    LaunchedEffect(modelNode != null) {
+        if (modelNode != null) viewModel.onModelPlaced()
+    }
+
+    // Manual alignment offsets, relative to the anchor.
     var manualPosition by remember { mutableStateOf(Position(0f, 0f, 0f)) }
 
     var manualYaw by remember { mutableStateOf(0f) }
 
-    // Pinch-to-resize multiplier for "Place It Myself", layered on top of
-    // whatever base scale the model would otherwise use (admin Model Size,
-    // same as any other manual placement). Kept separate from that base
-    // factor — see baseScaleFactor below — so a live pinch doesn't have to
-    // re-run the (comparatively heavy) model-measurement effect on every
-    // gesture tick.
+    // Pinch-to-resize multiplier, layered on top of whatever base scale the
+    // model would otherwise use. Kept separate from that base factor — see
+    // baseScaleFactor below — so a live pinch doesn't have to re-run the
+    // (comparatively heavy) model-measurement effect on every gesture tick.
     var manualScaleMultiplier by remember { mutableStateOf(1f) }
 
     /** The scale factor from ScaleBasis alone, before manualScaleMultiplier. */
     var baseScaleFactor by remember { mutableStateOf(0f) }
-
-    // ----- "Place It Myself" plane placement (see resetManualPlacement) -----
-    //
-    // This whole group is specific to PlacementSource.MANUAL. Geospatial and
-    // Image placement never touch it, and it never touches their anchors.
 
     /** Size, in pixels, of the ARScene view — needed to project world points
      *  (the aim reticle, the ground grid) into screen space. Kept up to date
@@ -793,25 +1031,52 @@ private fun ArCameraLayer(
     val scratchViewMatrix = remember { FloatArray(16) }
     val scratchProjMatrix = remember { FloatArray(16) }
 
+    /**
+     * How a screen drag maps onto the anchor's own X/Z axes, as
+     * [rightX, rightZ, forwardX, forwardZ].
+     *
+     * Drag used to be applied straight to the anchor's local axes, which are
+     * fixed at the instant of placement. That is fine while the visitor
+     * stands where they placed it and wrong everywhere else: walk around to
+     * the far side and dragging right moves the structure left, because
+     * "right" still means whatever right meant when the anchor was born.
+     *
+     * So the camera's own ground-plane right/forward are re-expressed in the
+     * anchor's frame every frame, and drags are applied through that. Drag
+     * right, it goes right, from wherever the visitor happens to be standing.
+     *
+     * A plain FloatArray rather than Compose state on purpose: this is
+     * rewritten on every AR frame, and making it observable would recompose
+     * the whole overlay 30-60 times a second for a value only a gesture
+     * callback ever reads.
+     */
+    val dragBasis = remember { FloatArray(4) { 0f }.also { it[0] = 1f; it[3] = 1f } }
+
     /** The world-space pose the aim reticle is currently over, from a
      *  screen-center hit test against a tracked horizontal plane. Null
      *  whenever the phone isn't currently pointed at a valid surface. */
     var groundReticlePose by remember { mutableStateOf<Pose?>(null) }
 
-    /** The plane the reticle is currently over. The polygon-containment
-     *  check that keeps the grid off of anything that isn't real floor
-     *  happens inline against the plane found each frame; this is kept
-     *  alongside groundReticlePose as the natural pairing for either
-     *  debugging or future use (e.g. surfacing which plane was used). */
-    var groundPlane by remember { mutableStateOf<Plane?>(null) }
+    // The reticle and grid are rewritten on every AR frame (30–60 times a
+    // second). They used to be plain state variables of this composable, and
+    // since this composable also passed them down, every write recomposed
+    // the WHOLE AR screen — camera layer, cards and all — each frame, which
+    // showed up as stutter and battery drain. They now live in a small
+    // holder that only PlacementGuideOverlay's Canvas reads, inside its draw
+    // phase, so a new frame just redraws those lines.
+    val placementGuide = remember { PlacementGuideState() }
+
+    // Not Compose state: written and read only on the AR frame callback and
+    // in the effect that creates it, never by composition.
+    val smokeEffectHolder = remember { SmokeEffectHolder() }
 
     /** groundReticlePose (or, once placed, the model's current ground point)
      *  projected to screen pixels, for the center indicator. Null hides it. */
-    var reticleScreenPos by remember { mutableStateOf<Offset?>(null) }
+    var reticleScreenPos by placementGuide::reticle
 
     /** Ground grid tile lines, already projected to screen pixels. Only
      *  populated before the structure is placed. */
-    var groundGridScreenLines by remember { mutableStateOf<List<Pair<Offset, Offset>>>(emptyList()) }
+    var groundGridScreenLines by placementGuide::gridLines
 
     /** Set by a tap on the aim surface, consumed on the next AR frame (where
      *  the actual Session/Anchor calls have to happen — see onSessionUpdated
@@ -824,29 +1089,112 @@ private fun ArCameraLayer(
     // material that never receives a depth texture.
     var depthSupported by remember { mutableStateOf(false) }
 
-    // Built once per session from the reference photo.
-    var imageDatabaseReady by remember { mutableStateOf(false) }
-
-    // The live ARCore session, captured from onSessionCreated below so the
-    // image-database build (see the LaunchedEffect near the reference-photo
-    // loading effect above) can run once it exists, off the main thread,
-    // instead of inline inside sessionConfiguration.
+    // The live ARCore session, captured from onSessionCreated below.
     var arCoreSession by remember { mutableStateOf<Session?>(null) }
 
-    // Off by default.
+    // Off by default, but a real toggle again — NOT permanently off.
     //
-    // Depth occlusion hides anything the depth map says is behind a real
-    // surface. For a reconstruction anchored to the very wall it replaces,
-    // that is a losing fight: the model and the masonry are at the same
-    // depth, so the real wall wins and nothing draws. The experience then
-    // only works if someone finds this toggle — which is not an experience.
+    // A previous pass here hard-disabled this, reasoning that occlusion can
+    // only ever clip the model against real-world objects and make it look
+    // like it's "floating." That reasoning was incomplete: depth-based
+    // occlusion is also what makes the reconstruction read as a structure
+    // actually standing in the scene, correctly receding behind whatever's
+    // genuinely nearer the camera (a passer-by, a pillar, the visitor's own
+    // surroundings) — see the "Depth is what makes the reconstruction read
+    // as a structure standing in the scene rather than a decal painted over
+    // the camera feed" comment on sessionConfiguration below. With
+    // occlusion permanently off, EVERY model draws in front of EVERYTHING
+    // regardless of real depth, all the time — which is exactly what made
+    // placement look worse/more "floating" after that change, not better.
     //
-    // It earns its place when a model stands clearly in front of real
-    // geometry and should be hidden by a passing visitor or a pillar, so it
-    // stays available rather than being removed.
+    // So this reverts to the original, deliberate compromise: off by
+    // default, but available per-visitor via the debug panel for scenes
+    // where correct occlusion helps the model sit in the scene rather than
+    // look pasted on top of it. Either way this is a rendering-only decision
+    // — see onViewUpdated below — and never affects the model's anchor,
+    // position, rotation, or scale.
     var occlusionEnabled by remember { mutableStateOf(false) }
 
-    var modelBytes by remember { mutableStateOf(0L) }
+    // ------------------------------------------------------- photo mode
+    //
+    // Digital zoom for composing a photograph, and nothing else.
+    //
+    // This is NOT a camera zoom and deliberately so: ARCore owns the capture
+    // session and publishes intrinsics that assume an uncropped frame, so
+    // there is no supported way to drive CONTROL_ZOOM_RATIO or a crop region
+    // underneath it, and doing so anyway would leave the model floating
+    // against a feed it no longer matches.
+    //
+    // Instead the Filament viewport is enlarged around the surface's centre.
+    // The camera feed is a fullscreen triangle in clip space and the model is
+    // projected through the same viewport, so both scale by exactly the same
+    // amount and stay in register — the frame is cropped, not re-aimed. It
+    // cannot move the structure, because it never touches a transform: the
+    // anchor, the node, its position, rotation and scale are all untouched,
+    // and the only thing that changes is which rectangle of the render
+    // reaches the glass.
+    var cameraZoom by remember { mutableStateOf(1f) }
+
+    // Whether the non-essential chrome is on screen. The shutter ignores
+    // this — a camera that hides its own shutter is a camera you cannot use.
+    var chromeVisible by remember { mutableStateOf(true) }
+
+    // Bumped by a tap to restart the idle countdown below.
+    var chromeWake by remember { mutableStateOf(0) }
+
+    // The lock/unlock notice currently showing, if any.
+    var arNotice by remember { mutableStateOf<ArNotice?>(null) }
+
+    // What the stage was the last time the effect below ran, so a transition
+    // can be told apart from merely being in a state.
+    //
+    // MANUAL_ALIGNING is both where a session starts and where unlocking
+    // returns to, and only the second is worth announcing — without this,
+    // every visitor would be told the model was unlocked before they had
+    // placed one.
+    var previousStage by remember { mutableStateOf<ArStage?>(null) }
+
+    LaunchedEffect(uiState.stage) {
+
+        val cameFrom = previousStage
+        previousStage = uiState.stage
+
+        arNotice = when {
+            uiState.stage == ArStage.PLACED -> ArNotice.LOCKED
+            cameFrom == ArStage.PLACED &&
+                uiState.stage == ArStage.MANUAL_ALIGNING -> ArNotice.UNLOCKED
+            else -> null
+        }
+
+        if (arNotice != null) {
+            kotlinx.coroutines.delay(AR_NOTICE_MS)
+            arNotice = null
+        }
+    }
+
+    // Once locked, the interface gets out of the way.
+    //
+    // Only in PLACED: while the visitor is still aligning, the controls ARE
+    // the task and hiding them would be sabotage. Leaving that stage — an
+    // unlock, a reset — brings everything straight back.
+    LaunchedEffect(uiState.stage, chromeWake) {
+
+        if (uiState.stage != ArStage.PLACED) {
+            chromeVisible = true
+            return@LaunchedEffect
+        }
+
+        chromeVisible = true
+        kotlinx.coroutines.delay(PHOTO_MODE_CHROME_IDLE_MS)
+        chromeVisible = false
+    }
+
+    // Zoom belongs to a locked composition, so unlocking drops it. Keeping a
+    // 3x crop while somebody drags the structure around would mean dragging
+    // against a view that no longer shows where they are putting it.
+    LaunchedEffect(uiState.stage) {
+        if (uiState.stage != ArStage.PLACED) cameraZoom = 1f
+    }
 
     // Whether to light the model from SceneView's own neutral environment
     // instead of from ARCore's reading of the room.
@@ -859,46 +1207,37 @@ private fun ArCameraLayer(
     // detail — the same asset that looks correct in the admin preview,
     // which lights it with a fixed studio environment.
     //
-    // Defaulting to the neutral environment means the reconstruction is
-    // legible wherever it is viewed. The estimate can be switched back on
-    // below, and is worth it outdoors in daylight, where matching the real
-    // light genuinely helps the model sit in the scene.
     // Survives leaving and reopening AR, which it has to: the choice only
     // takes effect when a session is created, so a value scoped to this
     // composable would reset itself on the very reopen that was meant to
     // apply it.
     val studioLighting = ArLightingPreference.useNeutralLighting
 
-    // How wide ARCore measures the recognised structure to be, in metres.
+    // How much to lift the reconstruction's own base colour — see
+    // MODEL_BRIGHTNESS_STEPS. Separate from the lighting mode above and
+    // from anything to do with placement: it changes a material constant,
+    // never a transform, and takes effect on the next frame rather than the
+    // next session.
+    val modelBrightness = ArLightingPreference.brightnessBoost
+
+    // Brightness starts at 1.0x on every visit to AR.
     //
-    // Estimated from the camera feed rather than declared in the admin
-    // panel, so the same reference photo works whether it is printed on a
-    // leaflet, shown on a monitor, or being looked at as the building
-    // itself. This is the only thing tying the camera feed to real-world
-    // scale, which is why the model is sized against it.
-    var imageExtentX by remember { mutableStateOf(0f) }
-
-    /**
-     * The structure height the model is scaled from, fixed once ARCore's
-     * image-size estimate settles.
-     *
-     * Without this the model would resize on every frame. ARCore refines its
-     * size estimate continuously while tracking, and feeding each new value
-     * straight into the scale makes a building visibly breathe. Locking on
-     * the first stable reading trades a little accuracy for a model that
-     * holds still — which matters more, because a visitor cannot tell a 3%
-     * size error but notices jitter immediately.
-     */
-    var lockedStructureHeight by remember { mutableStateOf<Float?>(null) }
-
-    /** Consecutive readings agreeing within tolerance, for the lock. */
-    var stableReadings by remember { mutableStateOf(0) }
+    // Unlike the lighting mode above, which has to outlive this screen
+    // because it only takes effect when the next session is configured,
+    // brightness applies on the next frame and carrying it forward is not
+    // wanted: a lift dialled in for one structure under one sky should not
+    // silently become the starting point for the next one.
+    //
+    // Reset on the way OUT rather than on the way in, so a configuration
+    // change — a rotation, a theme switch — recomposes the screen without
+    // throwing away an adjustment the visitor just made.
+    DisposableEffect(Unit) {
+        onDispose { ArLightingPreference.brightnessBoost = DEFAULT_MODEL_BRIGHTNESS }
+    }
 
     /** Measured from the GLB, kept for the placement panel. */
     var measuredModelHeight by remember { mutableStateOf(0f) }
     var appliedScaleFactor by remember { mutableStateOf(0f) }
-
-    var imageExtentZ by remember { mutableStateOf(0f) }
 
     // Animation clock, taken when the model finishes loading rather than
     // when the screen opens, so a plume always starts from its first frame
@@ -907,45 +1246,25 @@ private fun ArCameraLayer(
 
     var animationCount by remember { mutableStateOf(0) }
 
-    var debug by remember { mutableStateOf<ArPlacementDebug?>(null) }
-
-    var showDebug by remember { mutableStateOf(false) }
+    var showPlacementSettings by remember { mutableStateOf(false) }
 
     // Anchor/node cleanup lives further down, right after the ARScene(...)
     // call — see the comment there for why the position matters.
 
-    // Frame-clock baseline for the recognition timeout. Re-taken on retry so
-    // a second attempt gets a full window instead of instantly timing out
-    // against the first attempt's start time.
-    val startedAtMillis = remember(uiState.retryToken) { System.currentTimeMillis() }
-
-    LaunchedEffect(uiState.retryToken) {
-        if (uiState.retryToken > 0) {
-            anchorCreated = false
-            anchorSource = null
-            anchoredImageId = null
-            trackingLostFrames = 0
-            terrainPending = false
-            geoGoodFrames = 0
-            earthTrackingSinceMillis = 0L
-            geoPosePinned = false
-            lastTerrainRequestMillis = 0L
-        }
-    }
-
     // Usually already on the phone: Site Details and the arrival screen
-    // start downloading the model in the background (ArModelCache). Either
-    // way it loads in parallel with recognition / localisation.
-    LaunchedEffect(site?.arModelUrl) {
+    // start downloading the model in the background (ArModelCache).
+    LaunchedEffect(site?.arModelUrl, modelReloadToken) {
 
         val url = site?.arModelUrl
 
         if (!url.isNullOrBlank()) {
             modelInstance = try {
-                // Joins the background download Site Details / arrival
-                // started, if it's still running, instead of starting over.
-                val cachedModel = ArModelCache.get(context, url)
-                modelBytes = cachedModel.length()
+                // Local first: a model already on the phone (or downloaded
+                // from Offline Downloads, even an older version) opens
+                // straight away with no network. Otherwise it joins the
+                // background download Site Details / arrival started, if
+                // it's still running, instead of starting over.
+                val cachedModel = ArModelCache.get(context, url, site?.siteId)
                 // Bypass SceneView's file helper: it performs a single
                 // InputStream.read() and can return a partially-filled buffer
                 // for large models. readBytes() guarantees the complete GLB.
@@ -958,7 +1277,7 @@ private fun ArCameraLayer(
                 // is normal lifecycle behavior, not a failed GLB download.
                 throw error
             } catch (error: Throwable) {
-                Log.e("HistouryAR", "Could not load AR model for ${site.siteName}", error)
+                Log.e("HistouryAR", "Could not load AR model for ${site?.siteName}", error)
                 null
             }
 
@@ -994,11 +1313,68 @@ private fun ArCameraLayer(
         }.onFailure {
             Log.w("HistouryAR", "Could not apply matte surface correction", it)
         }
+
+        // Frustum culling off for this model's renderables. gltfio gives a
+        // skinned mesh a bounding box measured where it stood when loaded,
+        // but then carries that box along with the mesh's parent node — so
+        // for anything rigged that also travels (the kalesa horses), the box
+        // drifts away from the geometry and the renderer skips a horse that
+        // is squarely in view. A tabletop reconstruction is almost always
+        // entirely on screen, so culling saves next to nothing here anyway.
+        runCatching {
+            val rm = engine.renderableManager
+            instance.entities.forEach { entity ->
+                if (rm.hasComponent(entity)) rm.setCulling(rm.getInstance(entity), false)
+            }
+        }.onFailure {
+            Log.w("HistouryAR", "Could not disable culling", it)
+        }
+    }
+
+    // Base-colour lift, kept in its own effect rather than folded into the
+    // matte correction above.
+    //
+    // That one is keyed on the model alone because it runs once per load;
+    // this one has to re-run whenever the level changes. Merging them would
+    // mean re-keying the matte effect on brightness too — and that effect
+    // also takes the animation clock baseline, so every brightness change
+    // would silently restart the GLB's animations from frame one.
+    //
+    // Rendering only. Nothing here reads or writes the anchor, the node, or
+    // any position, rotation, or scale.
+    LaunchedEffect(modelInstance, modelBrightness) {
+
+        val instance = modelInstance ?: return@LaunchedEffect
+
+        runCatching {
+            instance.materialInstances.forEach { material ->
+                // Same per-material guard as the matte correction: a
+                // material without a baseColorFactor slot throws rather
+                // than ignoring the call, and one unusual material should
+                // not cost every other material its brightness.
+                runCatching {
+                    material.setParameter(
+                        "baseColorFactor",
+                        modelBrightness,
+                        modelBrightness,
+                        modelBrightness,
+                        1.0f
+                    )
+                }
+            }
+        }.onFailure {
+            Log.w("HistouryAR", "Could not apply model brightness", it)
+        }
     }
 
     // Attaches the model the moment both halves exist: the anchor and the
     // loaded model.
-    LaunchedEffect(anchor, modelInstance, imageExtentX) {
+    //
+    // Keyed on exactly those two. It used to carry a third key that was
+    // rewritten on every tracked frame, which cancelled and relaunched this
+    // coroutine dozens of times a second for the whole session even though
+    // the body is a no-op once placedNode exists.
+    LaunchedEffect(anchor, modelInstance) {
 
         val currentAnchor = anchor
         val currentModel = modelInstance
@@ -1026,16 +1402,15 @@ private fun ArCameraLayer(
             anchorNode.isScaleEditable = false
             anchorNode.isTouchable = false
 
-            // Placed at its authored size and scaled afterwards, once
-            // ARCore's size estimate has settled.
-            //
-            // scaleToUnits is deliberately not used. It normalises the
-            // model's *largest* dimension, so a tall structure would have its
-            // height set to the image's width — a tower would come out as
-            // wide as it is tall. The scale applied below divides by the
-            // model's own measured width instead, which is the dimension the
-            // reference photo actually corresponds to.
-            val node = ModelNode(modelInstance = currentModel)
+            // Reuse the node from before a "Reset Placement" when it belongs
+            // to this same model, instead of building a second node over the
+            // same instance.
+            val node = retainedModelNode
+                ?.takeIf { it.modelInstance === currentModel }
+                ?: ModelNode(modelInstance = currentModel)
+            retainedModelNode = null
+            node.position = Position(0f, 0f, 0f)
+            node.rotation = Rotation(0f, 0f, 0f)
 
             // Not touchable, so SceneView's gesture detector never picks it
             // and has nothing to forward to the anchor node above. All three
@@ -1048,6 +1423,11 @@ private fun ArCameraLayer(
             node.isRotationEditable = false
             node.isScaleEditable = false
             node.isTouchable = false
+
+            // Every renderable casts and receives, so each building, kalesa
+            // and person drops a shadow onto the model's own plaza floor.
+            node.isShadowCaster = true
+            node.isShadowReceiver = true
 
             anchorNode.addChildNode(node)
 
@@ -1065,31 +1445,35 @@ private fun ArCameraLayer(
         modelNode?.let { node ->
             node.position = manualPosition
             node.rotation = Rotation(0f, manualYaw, 0f)
+            // Keep the sun where the model's painted sky puts it — low in the
+            // west-southwest — however the visitor has turned the structure.
+            sunLight.lightDirection = rotateByQuaternion(node.worldQuaternion, SUN_DIRECTION_MODEL_SPACE)
         }
     }
 
-    // Uniform scale for the model, from whichever basis the anchor set.
+    // Sound sources are read from the model once it is standing in the
+    // scene, and dropped again on reset or when the model goes away.
+    LaunchedEffect(modelNode, modelInstance) {
+        val instance = modelInstance
+        if (modelNode != null && instance != null) sceneAudio.bind(engine, instance) else sceneAudio.unbind()
+    }
+
+    // Uniform scale for the model — one factor on all three axes, so the
+    // structure's authored proportions are never stretched or squashed.
     //
     //  1. An explicit Model Size from the admin panel wins. It is a real
-    //     measurement, where the camera's estimate is an estimate — and it is
-    //     the only option for geospatial placement, which has no photo to
-    //     measure against.
-    //  2. Otherwise the model's own HEIGHT is matched to the physical height
-    //     of the STRUCTURE inside the recognised photo — not the photo's
-    //     full height, and not its width. ARCore only ever measures the
-    //     whole printed/displayed photo; [ScaleBasis.structureHeightMeters]
-    //     has already had the admin's structure-box fraction applied to it
-    //     (see the anchor-creation block above), so the sky, ground, trees
-    //     and margins the photo also shows never factor into the model's
-    //     size. A photo saved before that box existed defaults to the full
-    //     frame, matching this project's previous (whole-image) behaviour.
+    //     measurement of the real structure.
+    //  2. Otherwise the model is normalised to a sensible human-scale
+    //     starting size and the visitor pinches from there.
     //
-    // Exactly one factor, applied to all three axes, so the model's authored
-    // proportions are preserved rather than stretched or squashed — the
-    // model naturally ends up as wide as it was modelled to be for that
-    // height, even if that makes it wider than the structure in the photo or
-    // wider than the current camera view. That is expected: a visitor can
-    // step back to see all of it.
+    // That second case is new and it matters. The old code had no fallback
+    // at all: with no admin Model Size it returned early, leaving
+    // baseScaleFactor at 0f — and because the pinch effect below bails out
+    // on a zero base, pinch-to-resize and the +/- buttons became silently
+    // dead while the model rendered at raw authored GLB units (a scan
+    // authored at 30 units stood 30 m tall). That was survivable while most
+    // sites were placed by image recognition; with manual placement the only
+    // route in, it would have hit every site without an explicit size.
     LaunchedEffect(modelNode, scaleBasis, modelInstance) {
 
         val node = modelNode ?: return@LaunchedEffect
@@ -1104,25 +1488,23 @@ private fun ArCameraLayer(
             explicitSize > 0f && modelLongest > 0.0001f -> explicitSize / modelLongest
             basis.structureHeightMeters != null && modelHeight > 0.0001f ->
                 basis.structureHeightMeters / modelHeight
-            else -> return@LaunchedEffect
+            modelLongest > 0.0001f -> DEFAULT_MANUAL_MODEL_SIZE_METERS / modelLongest
+            // Nothing measurable at all: authored units, which at least
+            // leaves the pinch multiplier something to work with.
+            else -> 1f
         }
 
-        // The pinch multiplier (manualScaleMultiplier, "Place It Myself"
-        // only) is applied in the separate, lightweight effect just below
-        // rather than here, so a live pinch gesture doesn't re-run
+        // The pinch multiplier is applied in the separate, lightweight effect
+        // just below rather than here, so a live pinch gesture doesn't re-run
         // measureModelHeight()/measureModelLongestSide() on every tick.
         baseScaleFactor = factor
 
         measuredModelHeight = modelHeight
-        lockedStructureHeight = basis.structureHeightMeters
     }
 
     // Combines the base factor above with the manual pinch multiplier.
     // Split out from the effect above so pinching only ever does this cheap
-    // multiply-and-assign, never the model measurement. manualScaleMultiplier
-    // stays at its default (1f) for Geospatial/Image placement, since only
-    // the "Place It Myself" pinch gesture ever changes it — so this is a
-    // no-op for those and never a second, competing writer of node.scale.
+    // multiply-and-assign, never the model measurement.
     LaunchedEffect(modelNode, baseScaleFactor, manualScaleMultiplier) {
         val node = modelNode ?: return@LaunchedEffect
         if (baseScaleFactor <= 0f) return@LaunchedEffect
@@ -1131,94 +1513,43 @@ private fun ArCameraLayer(
         appliedScaleFactor = finalFactor
     }
 
-    // Builds the AugmentedImageDatabase and registers every reference photo
-    // with ARCore, off the main thread.
+    // "Reset Placement": drop the anchor, clear every piece of local
+    // placement state, and hand control back to aiming so the next tap
+    // starts a completely fresh placement.
     //
-    // This used to happen inline inside sessionConfiguration below, which
-    // ARScene calls synchronously on the thread that creates/resumes the AR
-    // session — the main/UI thread. addImage() does real feature-extraction
-    // work, a full pass over each photo's pixels, and with more than one
-    // reference photo (or a large one) that easily runs past the 5 seconds
-    // Android allows before declaring "Input dispatching timed out" and
-    // killing the app with an ANR — exactly what on-device testing showed
-    // right after the earlier native-crash fix stopped masking it.
-    //
-    // Deferring it to here, keyed on the session becoming available, moves
-    // that work to Dispatchers.Default and hands the finished database to
-    // the already-running session via session.configure() instead of
-    // blocking session creation on it. Runs once per session: imageSetupDone
-    // flips true at the end and short-circuits any re-trigger.
-    LaunchedEffect(arCoreSession, referenceBitmaps, uiState.useImage) {
-
-        val session = arCoreSession ?: return@LaunchedEffect
-        if (!uiState.useImage || referenceBitmaps.isEmpty() || imageSetupDone) {
-            return@LaunchedEffect
-        }
-
-        val (accepted, rejected, database) = withContext(Dispatchers.Default) {
-            val db = AugmentedImageDatabase(session)
-            val acceptedIds = mutableSetOf<String>()
-            val rejectedLabels = mutableListOf<String>()
-
-            for ((id, bitmap) in referenceBitmaps) {
-                try {
-                    db.addImage(id, bitmap)
-                    acceptedIds += id
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
-                    // ImageInsufficientQualityException is the usual case:
-                    // not enough distinct detail to match. The other photos
-                    // can still work.
-                    val label = referencesById[id]?.label ?: id
-                    Log.e("HistouryAR", "Reference photo \"$label\" rejected by ARCore", error)
-                    rejectedLabels += label
-                }
-            }
-
-            Triple(acceptedIds, rejectedLabels, db)
-        }
-
-        if (accepted.isNotEmpty()) {
-            try {
-                val liveConfig = session.config
-                liveConfig.augmentedImageDatabase = database
-                session.configure(liveConfig)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                Log.e("HistouryAR", "Could not attach the image database to the AR session", error)
-            }
-        }
-
-        registeredImageIds = accepted
-        rejectedPhotoLabels = rejected
-        imageDatabaseReady = accepted.isNotEmpty()
-        imageSetupDone = true
-    }
-
-    // "Reset Placement" for "Place It Myself": detach whatever anchor/node
-    // exists, clear every piece of local manual-placement state, and hand
-    // control back to startManualPlacement() — the exact same ViewModel
-    // entry point "Place it myself" itself uses — so the aiming grid/reticle
-    // reappears and the next tap starts a completely fresh placement.
+    // The model itself is KEPT and re-attached on the next placement. Reset
+    // used to throw the ModelInstance away and load the GLB again, and the
+    // old copy (with its textures) stayed in memory until the screen
+    // closed — every reset added another full copy, which could run a
+    // low-memory phone out of memory. The original reason for reloading was
+    // that building a SECOND ModelNode over the same instance left two nodes
+    // owning one set of Filament entities; reusing the SAME ModelNode (see
+    // retainedModelNode) avoids that without a reload, and its position,
+    // rotation and scale are re-applied from the reset values below.
     val resetManualPlacement: () -> Unit = {
         anchor?.detach()
-        placedNode?.let(childNodes::remove)
+        val oldAnchorNode = placedNode
+        val keptNode = modelNode
+        if (oldAnchorNode != null && keptNode != null) {
+            runCatching { oldAnchorNode.removeChildNode(keptNode) }
+        }
+        oldAnchorNode?.let(childNodes::remove)
+        retainedModelNode = keptNode
+
         anchor = null
         placedNode = null
         modelNode = null
         anchorCreated = false
+        scaleBasis = null
         manualPosition = Position(0f, 0f, 0f)
         manualYaw = 0f
         manualScaleMultiplier = 1f
         baseScaleFactor = 0f
         groundReticlePose = null
-        groundPlane = null
         reticleScreenPos = null
         groundGridScreenLines = emptyList()
         pendingPlaceTap = false
-        viewModel.startManualPlacement()
+        viewModel.resetManualPlacement()
     }
 
     Box(
@@ -1231,49 +1562,55 @@ private fun ArCameraLayer(
             modifier = Modifier.fillMaxSize(),
             engine = engine,
             modelLoader = modelLoader,
+
+            // Both of these go together: passing our own loader keeps the
+            // composable from quietly building a second one, and the
+            // environment is the neutral IBL assembled above, replacing the
+            // unlit default an AR scene would otherwise use.
+            environmentLoader = environmentLoader,
+            environment = arEnvironment,
+
+            mainLightNode = sunLight,
+
+            // Shadows are off by default in a Filament view; PCF keeps their
+            // edges soft enough to read as sunlight rather than a cut-out.
+            onViewCreated = {
+                view.setShadowingEnabled(true)
+                view.setShadowType(com.google.android.filament.View.ShadowType.PCF)
+            },
+
             childNodes = childNodes,
 
             planeRenderer = false,
 
             sessionConfiguration = { session, config ->
 
-                // Placement normally comes from recognizing the structure or
-                // from Geospatial, never from a visitor-selected horizontal
-                // plane — but "Place It Myself" (PlacementSource.MANUAL) is
-                // the fallback for when both of those fail, and it anchors
-                // to a real detected floor/ground plane rather than a fixed
-                // point in space. Plane finding costs a little CPU but runs
-                // independently of image tracking and Geospatial, so leaving
-                // it on for every session (rather than only once the manual
-                // fallback is reached) means ARCore already has a head start
-                // on detecting the ground by the time "Place it myself" is
-                // tapped, instead of starting plane detection from zero.
+                // The one and only way the structure gets positioned: the
+                // visitor aims at a real detected floor and taps. Plane
+                // finding is therefore no longer an optional extra for a
+                // fallback path — it is the whole placement mechanism, so it
+                // runs for every session from the first frame.
                 config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL
 
-                // Geospatial only when this scene uses it: it costs power and
-                // network, and asks Google's servers to localise the phone.
-                val wantGeospatial = uiState.useGeospatial
-                val geospatialSupported = wantGeospatial && runCatching {
-                    session.isGeospatialModeSupported(Config.GeospatialMode.ENABLED)
-                }.getOrDefault(false)
+                // Geospatial is explicitly OFF. Not merely unused — asked
+                // for and disabled, so no session ever pays for VPS power,
+                // network, or a round trip to Google's localisation service.
+                // The site's own latitude/longitude still gate access to AR
+                // via its geofence, but they never reach the model's
+                // transform. See the note on ArStage.
+                config.geospatialMode = Config.GeospatialMode.DISABLED
 
-                config.geospatialMode = if (geospatialSupported) {
-                    Config.GeospatialMode.ENABLED
-                } else {
-                    Config.GeospatialMode.DISABLED
-                }
-
-                geospatialActive = geospatialSupported
-                geospatialUnsupported = wantGeospatial && !geospatialSupported
-
-                // Autofocus materially improves image recognition — a
-                // fixed-focus frame of a distant facade is often too soft for
-                // feature matching to succeed.
+                // Autofocus still earns its place: a sharp frame gives
+                // ARCore better features to track the floor with, which is
+                // what keeps a placed structure from drifting.
                 config.focusMode = Config.FocusMode.AUTO
 
-                // See the studioLighting comment above. DISABLED does not mean
-                // unlit: it leaves SceneView's default neutral environment in
-                // place rather than replacing it with ARCore's estimate.
+                // See the studioLighting comment above. DISABLED does not
+                // mean unlit — it leaves the neutral environment supplied
+                // via the `environment` parameter above in place rather than
+                // letting ARCore's estimate override it. That only holds
+                // because that environment is now explicitly provided; with
+                // the stock AR environment, DISABLED did mean an unlit scene.
                 config.lightEstimationMode = if (studioLighting) {
                     Config.LightEstimationMode.DISABLED
                 } else {
@@ -1294,30 +1631,6 @@ private fun ArCameraLayer(
                 }
 
                 depthSupported = supportsDepth
-
-                // Every reference photo goes into one database, named by its
-                // admin-panel id. ARCore then recognises whichever of them
-                // the camera sees.
-                //
-                // Registered without a declared physical width: ARCore
-                // estimates each photo's real size from the camera feed, so
-                // nobody has to measure the structure with a tape. The
-                // estimate needs the visitor to move the phone slightly
-                // before it settles, which the width stabiliser below waits
-                // for before placing anything.
-                //
-                // The actual database build (real feature-extraction work,
-                // a full pass over each photo) does NOT happen here anymore.
-                // sessionConfiguration runs synchronously on the thread that
-                // creates/resumes the session — the main/UI thread — and
-                // that work was slow enough to trip a genuine ANR on-device.
-                // It's built off the main thread instead, once arCoreSession
-                // is set below: see the LaunchedEffect keyed on arCoreSession
-                // above the Box/ARScene call.
-                if (!uiState.useImage) {
-                    imageDatabaseReady = false
-                    imageSetupDone = true
-                }
             },
 
             // Configuring depthMode is only half of it. SceneView renders the
@@ -1326,9 +1639,51 @@ private fun ArCameraLayer(
             // never applied unless it is switched on here. Set per frame
             // rather than once at creation because the flag is only known
             // after the session is configured; the setter is a no-op when the
-            // value hasn't changed.
+            // value hasn't changed. Whichever way this reads, it is
+            // rendering-only and never influences AR placement — the
+            // anchor's position, rotation, and scale are set elsewhere and
+            // nothing here touches them.
             onViewUpdated = {
+
                 cameraStream?.isDepthOcclusionEnabled = depthSupported && occlusionEnabled
+
+                // With ARCore light estimation on, SceneView lights the model
+                // from its own estimated light instead of sunLight; that one
+                // is created shadowless, so give it the same shadows.
+                mainLightEstimatedNode?.isShadowCaster = true
+
+                // The digital zoom described on cameraZoom's declaration.
+                //
+                // Applied here rather than from the frame callback because
+                // SceneView only assigns the viewport on resize, so this
+                // sticks — and because reading cameraZoom makes this run on
+                // exactly the recompositions where it changed, rather than
+                // costing work on every one of the sixty frames a second
+                // where it did not.
+                //
+                // The aspect ratio is preserved, which is what lets the
+                // camera projection stay untouched: widening and heightening
+                // by the same factor crops the render without distorting it,
+                // so nothing has to be reprojected and the feed and the model
+                // cannot drift apart.
+                val surfaceWidth = width
+                val surfaceHeight = height
+
+                if (surfaceWidth > 0 && surfaceHeight > 0) {
+
+                    val zoomedWidth = (surfaceWidth * cameraZoom).toInt()
+                    val zoomedHeight = (surfaceHeight * cameraZoom).toInt()
+
+                    // A negative origin is the whole trick: the render is
+                    // larger than the surface and centred on it, so the
+                    // surface shows the middle of it.
+                    view.viewport = Viewport(
+                        (surfaceWidth - zoomedWidth) / 2,
+                        (surfaceHeight - zoomedHeight) / 2,
+                        zoomedWidth,
+                        zoomedHeight
+                    )
+                }
             },
 
             onSessionCreated = { session ->
@@ -1344,383 +1699,15 @@ private fun ArCameraLayer(
 
             onSessionUpdated = { session, frame ->
 
-                val nowMillis = System.currentTimeMillis()
-                val elapsed = ((nowMillis - startedAtMillis) / 1000).toInt()
+                // Smoke plumes follow the ruins and face the camera; the
+                // effect throttles itself to 30 updates a second.
+                smokeEffectHolder.effect?.update(
+                    frame.timestamp,
+                    frame.camera.pose,
+                    frame.camera.trackingState == TrackingState.TRACKING
+                )
 
-                viewModel.onSearchTick(elapsed)
-
-                // ---------------------------------------------------- image
-
-                // Every photo was rejected: image recognition can never fire.
-                // Carry on with geospatial if it's set up, otherwise go
-                // straight to the manual-placement offer.
-                if (uiState.useImage && imageSetupDone && !imageDatabaseReady &&
-                    !imageFailureReported
-                ) {
-                    imageFailureReported = true
-                    val reason = "This site's reference photos don't have enough " +
-                        "visible detail for the camera to recognize them."
-                    if (uiState.useGeospatial) {
-                        viewModel.onImageAnchoringUnavailable(reason)
-                    } else if (uiState.stage == ArStage.SEARCHING) {
-                        viewModel.onAnchorFailed(reason)
-                    }
-                }
-
-                // getAllTrackables rather than getUpdatedTrackables: an image
-                // tracked steadily doesn't necessarily appear in the
-                // per-frame updated set, and losing sight of it needs to be
-                // noticed too.
-                val ourImages = if (imageDatabaseReady) {
-                    runCatching {
-                        session.getAllTrackables(AugmentedImage::class.java)
-                            .filter { it.name in referencesById }
-                    }.getOrDefault(emptyList())
-                } else {
-                    emptyList()
-                }
-
-                // Only FULL_TRACKING counts. Under LAST_KNOWN_POSE ARCore is
-                // extrapolating from an image it can no longer see.
-                val fullyTracked = ourImages.filter {
-                    it.trackingState == TrackingState.TRACKING &&
-                        it.trackingMethod == AugmentedImage.TrackingMethod.FULL_TRACKING
-                }
-
-                // Stick with the photo the model is already anchored to while
-                // it's in view, so two photos in frame don't fight.
-                val trackedImage = fullyTracked.firstOrNull { it.name == anchoredImageId }
-                    ?: fullyTracked.firstOrNull()
-
-                // Width stabiliser, per photo.
-                //
-                // ARCore refines its size (and with it, distance) estimate
-                // continuously for the first second or so. Anchoring on the
-                // very first detection — which this screen used to do — fixed
-                // the model at that early, often wrong, estimate. Now nothing
-                // is placed until the estimate has held steady, and a photo
-                // that keeps shifting still locks after a few seconds rather
-                // than never.
-                if (trackedImage != null) {
-
-                    val name = trackedImage.name
-
-                    if (name != stabilizerImageId) {
-                        stabilizerImageId = name
-                        stableReadings = 0
-                        fullTrackingFrames = 0
-                        relockFrames = 0
-                        imageExtentX = 0f
-                    }
-
-                    fullTrackingFrames += 1
-
-                    val reading = trackedImage.extentX
-                    val locked = lockedWidths[name]
-
-                    if (reading > 0.01f) {
-
-                        if (locked == null) {
-
-                            val previous = imageExtentX
-                            stableReadings = if (
-                                previous > 0.01f &&
-                                kotlin.math.abs(reading - previous) / previous < SIZE_AGREEMENT
-                            ) {
-                                stableReadings + 1
-                            } else {
-                                0
-                            }
-
-                            if (stableReadings >= STABLE_READINGS_REQUIRED ||
-                                fullTrackingFrames >= SIZE_SETTLE_FALLBACK_FRAMES
-                            ) {
-                                lockedWidths[name] = reading
-                                lockedHeights[name] = trackedImage.extentZ
-                            }
-                        } else if (!anchorCreated) {
-
-                            // Still searching and the estimate moved well away
-                            // from the lock: the early lock was wrong. Adopt
-                            // the new size before anything is placed. Once the
-                            // model is placed its size never changes again —
-                            // a rescale would read as the model moving.
-                            relockFrames = if (kotlin.math.abs(reading - locked) / locked > SIZE_RELOCK_DIFFERENCE) {
-                                relockFrames + 1
-                            } else {
-                                0
-                            }
-
-                            if (relockFrames >= SIZE_RELOCK_FRAMES) {
-                                lockedWidths[name] = reading
-                                lockedHeights[name] = trackedImage.extentZ
-                                relockFrames = 0
-                            }
-                        }
-
-                        imageExtentX = reading
-                        imageExtentZ = trackedImage.extentZ
-                    }
-                }
-
-                val trackedWidth = trackedImage?.let { lockedWidths[it.name] }
-                val trackedHeight = trackedImage?.let { lockedHeights[it.name] }
-                val trackedReference = trackedImage?.let { referencesById[it.name] }
-
-                // ----------------------------------------------- geospatial
-
-                if (geospatialUnsupported && !geoProblemReported) {
-                    geoProblemReported = true
-                    viewModel.onGeospatialUnavailable(
-                        "This phone doesn't support placing AR by location."
-                    )
-                }
-
-                var geoReadyToPlace = false
-                var earthIsTracking = false
-                var geoHorizontal = Double.MAX_VALUE
-                val earth: Earth? = if (geospatialActive) {
-                    runCatching { session.earth }.getOrNull()
-                } else {
-                    null
-                }
-
-                if (earth != null) {
-
-                    val earthProblem = describeEarthProblem(earth.earthState)
-
-                    if (earthProblem != null) {
-                        geoDebug = earth.earthState.name
-                        if (!geoProblemReported) {
-                            geoProblemReported = true
-                            viewModel.onGeospatialUnavailable(earthProblem)
-                        }
-                    } else if (earth.trackingState == TrackingState.TRACKING) {
-
-                        val pose: GeospatialPose = earth.cameraGeospatialPose
-                        geoHorizontal = pose.horizontalAccuracy
-                        val headingError = pose.orientationYawAccuracy
-
-                        if (earthTrackingSinceMillis == 0L) earthTrackingSinceMillis = nowMillis
-                        earthIsTracking = true
-
-                        // Earth is tracking. Deploy as soon as the fix is
-                        // precise and has held for a moment (a single lucky
-                        // frame isn't a fix). Because the model is never
-                        // moved once placed, it's worth a few seconds' wait
-                        // for a precise fix — but not forever: after
-                        // GEO_FALLBACK_AFTER_MS of tracking, a usable fix is
-                        // accepted so the model still deploys automatically
-                        // in Intramuros' narrow streets.
-                        val precise = geoHorizontal <= GEO_MAX_HORIZONTAL_ERROR_METERS &&
-                            headingError <= GEO_MAX_HEADING_ERROR_DEGREES
-                        val usable = geoHorizontal <= GEO_USABLE_HORIZONTAL_ERROR_METERS &&
-                            headingError <= GEO_USABLE_HEADING_ERROR_DEGREES
-                        val waitedLongEnough =
-                            nowMillis - earthTrackingSinceMillis >= GEO_FALLBACK_AFTER_MS
-
-                        geoGoodFrames = if (precise || (usable && waitedLongEnough)) {
-                            geoGoodFrames + 1
-                        } else {
-                            0
-                        }
-                        geoReadyToPlace = geoGoodFrames >= GEO_GOOD_FRAMES_REQUIRED
-
-                        geoDebug = String.format("±%.1f m, ±%.0f°", geoHorizontal, headingError)
-
-                        // Throttled: the card only needs a couple of updates a
-                        // second, and every update recomposes the overlay.
-                        if (nowMillis - lastGeoStatusMillis > GEO_STATUS_INTERVAL_MS) {
-                            lastGeoStatusMillis = nowMillis
-                            viewModel.onGeoStatus(
-                                GeoStatus(
-                                    tracking = true,
-                                    horizontalAccuracyMeters = geoHorizontal,
-                                    headingAccuracyDegrees = headingError,
-                                    goodEnough = geoReadyToPlace
-                                )
-                            )
-                        }
-                    } else {
-                        geoGoodFrames = 0
-                        earthTrackingSinceMillis = 0L
-                        geoDebug = "localizing…"
-                        if (nowMillis - lastGeoStatusMillis > GEO_STATUS_INTERVAL_MS) {
-                            lastGeoStatusMillis = nowMillis
-                            viewModel.onGeoStatus(GeoStatus(tracking = false))
-                        }
-                    }
-                }
-
-                // ------------------------------------------------ placement
-
-                // PLACEMENT HAPPENS EXACTLY ONCE.
-                //
-                // Every anchor below is a world anchor (session.createAnchor
-                // or an Earth terrain anchor), created a single time. The
-                // model is a child of that anchor's node and nothing moves
-                // it afterwards, so walking, turning or tilting the phone
-                // only changes the camera view — the structure stays where
-                // it was put.
-                //
-                // This is the camera-following fix. The model used to be
-                // re-anchored while the visitor moved (image pose
-                // "corrections", geospatial re-resolves, a geospatial-to-
-                // photo hand-over), and earlier still it was attached to the
-                // AugmentedImage trackable itself. A photo registered
-                // without a known physical size has its distance estimated
-                // from parallax, so as the phone moved that estimate slid
-                // along the line of sight — and the model slid with it,
-                // which looks exactly like it is following the camera.
-
-                // 1) Image recognition — only for scenes configured to use it
-                //    (the image database is empty otherwise, so trackedImage
-                //    is always null for geospatial-only scenes).
-                if (!anchorCreated && trackedImage != null && trackedWidth != null &&
-                    trackedHeight != null &&
-                    trackedReference != null && site != null &&
-                    viewModel.beginAnchoring(PlacementSource.IMAGE)
-                ) {
-                    try {
-                        anchor = session.createAnchor(
-                            imageAnchorPose(trackedImage, trackedReference)
-                        )
-
-                        anchorCreated = true
-                        anchorSource = PlacementSource.IMAGE
-                        anchoredImageId = trackedImage.name
-                        // The model's target size: not the photo's full
-                        // physical height, but the slice of it the admin
-                        // marked as the structure itself.
-                        scaleBasis = ScaleBasis(
-                            structureHeightMeters =
-                                trackedHeight * trackedReference.structureHeightFraction
-                        )
-
-                        viewModel.onAnchorPlaced(PlacementSource.IMAGE, trackedReference.label)
-                    } catch (error: Exception) {
-                        Log.e("HistouryAR", "Image anchor creation failed", error)
-                        anchorCreated = false
-                        viewModel.onAnchorFailed(
-                            error.message?.takeIf { it.isNotBlank() }
-                                ?: "The structure was recognized but the model " +
-                                "couldn't be attached to it."
-                        )
-                    }
-                }
-
-                // 2) Geospatial, in two overlapping steps.
-                //
-                //  a) As soon as Earth has ANY fix, ask Google for the terrain
-                //     anchor (the ground height at the saved spot). That
-                //     network round trip used to start only after the
-                //     location was precise, adding its whole wait on top.
-                //  b) When the location is precise enough, place the model
-                //     on that anchor — usually already resolved by then, so
-                //     it appears immediately.
-                //
-                // Same placement accuracy as before: the model still only
-                // appears once the fix is good, and step (b) reads the
-                // anchor's pose at that moment (a terrain anchor's pose
-                // improves along with the location estimate).
-                if (earth != null && site != null && earthIsTracking && !anchorCreated &&
-                    !terrainPending && earlyTerrainAnchor == null &&
-                    !uiState.placementIsManual &&
-                    nowMillis - lastTerrainRequestMillis > TERRAIN_RETRY_INTERVAL_MS
-                ) {
-                    terrainPending = true
-                    lastTerrainRequestMillis = nowMillis
-                    resolveTerrainAnchor(earth, site) { resolved ->
-                        terrainPending = false
-                        if (resolved == null) return@resolveTerrainAnchor // retried later
-                        // Something else placed the model meanwhile (a photo
-                        // in "both" mode, or the visitor by hand): not needed.
-                        // Read live: this callback lands frames later.
-                        if (anchorCreated || viewModel.uiState.value.placementIsManual) {
-                            resolved.detach()
-                        } else {
-                            earlyTerrainAnchor = resolved
-                        }
-                    }
-                }
-
-                val readyAnchor = earlyTerrainAnchor
-                if (readyAnchor != null && !anchorCreated && geoReadyToPlace &&
-                    uiState.stage == ArStage.SEARCHING &&
-                    viewModel.beginAnchoring(PlacementSource.GEOSPATIAL)
-                ) {
-                    earlyTerrainAnchor = null // now owned by the placement
-                    anchor = readyAnchor
-                    anchorCreated = true
-                    anchorSource = PlacementSource.GEOSPATIAL
-                    scaleBasis = ScaleBasis(structureHeightMeters = null)
-                    viewModel.onAnchorPlaced(PlacementSource.GEOSPATIAL)
-                }
-
-                // Placed some other way: release the unused terrain anchor.
-                if (anchorCreated && earlyTerrainAnchor != null) {
-                    earlyTerrainAnchor?.detach()
-                    earlyTerrainAnchor = null
-                }
-
-                // WORLD-LOCK, part 2: pin a geospatial placement.
-                //
-                // A terrain anchor's pose is expressed through ARCore's
-                // Earth-to-local transform, and ARCore keeps re-estimating
-                // that transform — especially its heading — as the visitor
-                // walks and turns. A 5° heading correction moves a structure
-                // 20 m away by almost 2 m sideways, every time it happens.
-                // Applied frame by frame, that reads as the model sliding
-                // around with the phone.
-                //
-                // So the node stays attached to the terrain anchor (its
-                // tracking state still drives visibility), but its pose is
-                // taken ONCE, the first frame the anchor is tracking, and then
-                // held fixed in ARCore's local world frame — the same frame
-                // an ordinary world anchor lives in. From then on only the
-                // camera moves.
-                if (anchorSource == PlacementSource.GEOSPATIAL && !geoPosePinned) {
-                    val node = placedNode
-                    val geoAnchor = anchor
-                    if (node != null && geoAnchor != null &&
-                        geoAnchor.trackingState == TrackingState.TRACKING
-                    ) {
-                        node.pose = geoAnchor.pose
-                        node.updateAnchorPose = false
-                        // Keep it on screen if Earth tracking briefly pauses;
-                        // the pinned pose doesn't depend on it any more.
-                        node.visibleTrackingStates = setOf(
-                            TrackingState.TRACKING,
-                            TrackingState.PAUSED
-                        )
-                        geoPosePinned = true
-                    }
-                }
-
-                // Is whatever placed the model still being tracked?
-                when (anchorSource) {
-                    PlacementSource.IMAGE -> {
-                        // LAST_KNOWN_POSE counts as "still tracking" here: once the
-                        // model is anchored, its position no longer depends on the
-                        // image at all, and ARCore drops to LAST_KNOWN_POSE
-                        // routinely — a person walking past the structure, a
-                        // passing shadow, or someone stepping close enough that the
-                        // photo leaves the frame all do this even though nothing is
-                        // actually wrong. Only PAUSED/absent readings mean
-                        // recognition has genuinely dropped, and even then only
-                        // after a short grace period (TRACKING_LOST_GRACE_FRAMES).
-                        val stillTracking = ourImages.any { it.trackingState == TrackingState.TRACKING }
-
-                        trackingLostFrames = if (stillTracking) 0 else trackingLostFrames + 1
-
-                        viewModel.onPlacementTracking(trackingLostFrames < TRACKING_LOST_GRACE_FRAMES)
-                    }
-                    PlacementSource.GEOSPATIAL -> viewModel.onPlacementTracking(
-                        earth?.trackingState == TrackingState.TRACKING &&
-                            anchor?.trackingState == TrackingState.TRACKING
-                    )
-                    else -> Unit
-                }
+                // ----------------------------------------- animation driver
 
                 // Advance any animation the GLB carries.
                 //
@@ -1763,71 +1750,93 @@ private fun ArCameraLayer(
                     }
                 }
 
-                // Distance is measured anchor-to-camera rather than read off
-                // the model, because it stays meaningful even when the model
-                // never became visible — which is the whole point of this
-                // readout.
-                val cameraTranslation = frame.camera.pose.translation
-                val anchorTranslation = anchor?.pose?.translation
-
-                val distance = if (anchorTranslation != null) {
-                    val dx = anchorTranslation[0] - cameraTranslation[0]
-                    val dy = anchorTranslation[1] - cameraTranslation[1]
-                    val dz = anchorTranslation[2] - cameraTranslation[2]
-                    sqrt(dx * dx + dy * dy + dz * dz)
-                } else {
-                    0f
+                // Ambient sound follows the (now animated) sources. Throttled
+                // inside ArSpatialAudio, so calling it every frame is cheap.
+                if (modelNode != null && frame.camera.trackingState == TrackingState.TRACKING) {
+                    sceneAudio.update(frame.camera.pose, appliedScaleFactor)
                 }
 
-                val debugReference = anchoredImageId?.let { referencesById[it] }
+                // -------------------------------------------- drag basis
 
-                debug = ArPlacementDebug(
-                    modelLoaded = modelInstance != null,
-                    modelBytes = modelBytes,
-                    anchorAttached = anchor != null,
-                    nodeInScene = placedNode != null,
-                    distanceMeters = distance,
-                    appliedScale = appliedScaleFactor.toDouble(),
-                    structureHeightMeters = (lockedStructureHeight ?: 0f).toDouble(),
-                    modelHeightUnits = measuredModelHeight.toDouble(),
-                    scaleLocked = trackedHeight != null || lockedStructureHeight != null,
-                    extentX = trackedImage?.extentX ?: imageExtentX,
-                    extentZ = trackedImage?.extentZ ?: imageExtentZ,
-                    offsetRight = debugReference?.offsetRightMeters ?: 0.0,
-                    offsetUp = debugReference?.offsetUpMeters ?: 0.0,
-                    offsetForward = debugReference?.offsetForwardMeters ?: 0.0,
-                    occlusionOn = depthSupported && occlusionEnabled,
-                    studioLighting = studioLighting,
-                    materialCount = runCatching {
-                        modelInstance?.materialInstances?.size ?: 0
-                    }.getOrDefault(0),
-                    animationCount = animationCount,
-                    trackingMethod = trackedImage?.trackingMethod?.name ?: "none",
-                    placedBy = when (anchorSource) {
-                        PlacementSource.IMAGE -> "photo: ${debugReference?.label ?: "?"}"
-                        PlacementSource.GEOSPATIAL -> "geospatial"
-                        PlacementSource.MANUAL -> "by hand"
-                        null -> if (terrainPending) "resolving…" else "not yet"
-                    },
-                    photos = if (uiState.useImage || references.isNotEmpty()) {
-                        buildString {
-                            append("${registeredImageIds.size} of ${references.size} usable")
-                            if (rejectedPhotoLabels.isNotEmpty()) {
-                                append(" (rejected: ${rejectedPhotoLabels.joinToString()})")
-                            }
+                // Re-express the camera's ground-plane right/forward in the
+                // anchor's own frame, so a drag means the same thing from
+                // wherever the visitor is standing. Cheap: six dot products
+                // and two normalisations, no allocation beyond ARCore's own
+                // axis arrays.
+                val anchorPoseForBasis = anchor?.pose
+
+                if (anchorPoseForBasis != null) {
+
+                    val cameraPose = frame.camera.pose
+
+                    val camRight = cameraPose.xAxis
+                    val camBack = cameraPose.zAxis
+
+                    // Flattened onto the ground, because the structure only
+                    // ever moves across the floor — tilting the phone up
+                    // must not turn a sideways drag into a vertical one.
+                    var rx = camRight[0]
+                    var rz = camRight[2]
+                    val rLen = sqrt(rx * rx + rz * rz)
+
+                    // Camera looks down -Z, so forward on the ground is the
+                    // negated, flattened Z axis.
+                    var fx = -camBack[0]
+                    var fz = -camBack[2]
+                    val fLen = sqrt(fx * fx + fz * fz)
+
+                    if (rLen > 0.0001f && fLen > 0.0001f) {
+
+                        rx /= rLen
+                        rz /= rLen
+                        fx /= fLen
+                        fz /= fLen
+
+                        val anchorX = anchorPoseForBasis.xAxis
+                        val anchorZ = anchorPoseForBasis.zAxis
+
+                        var ax = anchorX[0]
+                        var az = anchorX[2]
+                        val aLen = sqrt(ax * ax + az * az)
+
+                        var bx = anchorZ[0]
+                        var bz = anchorZ[2]
+                        val bLen = sqrt(bx * bx + bz * bz)
+
+                        if (aLen > 0.0001f && bLen > 0.0001f) {
+
+                            ax /= aLen
+                            az /= aLen
+                            bx /= bLen
+                            bz /= bLen
+
+                            // Components of camera-right and camera-forward
+                            // along the anchor's own X and Z.
+                            dragBasis[0] = rx * ax + rz * az
+                            dragBasis[1] = rx * bx + rz * bz
+                            dragBasis[2] = fx * ax + fz * az
+                            dragBasis[3] = fx * bx + fz * bz
                         }
-                    } else {
-                        "not used"
-                    },
-                    geospatial = if (geospatialActive) geoDebug else "off",
-                    explicitModelSize = site?.arModelScale ?: 0.0                )
+                    }
+                }
 
-                // "Place It Myself": aim a screen-center hit test at a
-                // tracked horizontal plane every frame, so the grid/reticle
-                // overlay always shows exactly where a tap would place the
-                // structure, then place it there when the visitor taps — a
-                // real ARCore anchor on the detected floor, not a fixed
-                // point in space the way this used to work.
+                // ------------------------------------------------ placement
+
+                // PLACEMENT HAPPENS EXACTLY ONCE.
+                //
+                // The anchor below is an ordinary world anchor from
+                // session.createAnchor on a real detected floor, created a
+                // single time. The model is a child of that anchor's node
+                // and nothing moves it afterwards, so walking, turning or
+                // tilting the phone only changes the camera view — the
+                // structure stays where it was put.
+                //
+                // Nothing in this frame callback reads the camera's position
+                // and feeds it back into the model's transform. The drag
+                // basis above reads the camera's ORIENTATION, and only to
+                // decide which way a finger drag should push the structure;
+                // it is never applied on its own.
+
                 if (uiState.manualPlacementUnlocked) {
 
                     if (anchor == null) {
@@ -1857,14 +1866,16 @@ private fun ArCameraLayer(
                                         plane.isPoseInPolygon(result.hitPose)
                                 }
 
-                            groundPlane = hit?.trackable as? Plane
                             hit?.hitPose
                         } else {
-                            groundPlane = null
                             null
                         }
 
                         groundReticlePose = hitPose
+
+                        // Drives the coaching card: "move your phone slowly"
+                        // until there is real floor to aim at, then the grid.
+                        viewModel.onGroundFound(hitPose != null)
 
                         if (hitPose != null && viewSize.width > 0) {
                             reticleScreenPos = worldToScreen(
@@ -1889,17 +1900,21 @@ private fun ArCameraLayer(
                         // The tap itself is raised from the gesture layer
                         // (ArOverlay's onTapToPlace), which only sets a flag
                         // — every actual Session/Anchor call has to happen
-                        // here, on the AR frame thread, same as every other
-                        // anchor in this file.
+                        // here, on the AR frame thread.
                         if (pendingPlaceTap) {
                             pendingPlaceTap = false
-                            if (hitPose != null) {
+
+                            // The geofence has the final say right up to the
+                            // moment of placement: someone who has walked
+                            // out of the site does not get to deploy its
+                            // structure from the pavement outside.
+                            if (hitPose != null && !uiState.leftSiteArea) {
                                 try {
-                                    anchorSource = PlacementSource.MANUAL
                                     // Hand placement has nothing to measure
-                                    // the size against, so it uses the
-                                    // admin's Model Size when set and the
-                                    // model's authored size otherwise.
+                                    // the structure against, so the scale
+                                    // effect falls back to the admin's Model
+                                    // Size when set and a normalised default
+                                    // otherwise.
                                     scaleBasis = ScaleBasis(structureHeightMeters = null)
                                     anchor = session.createAnchor(hitPose)
                                     anchorCreated = true
@@ -1942,14 +1957,25 @@ private fun ArCameraLayer(
                         }
                     }
                 } else if (reticleScreenPos != null || groundGridScreenLines.isNotEmpty()) {
-                    // Locked, or manual mode never started: nothing to aim
-                    // at, so hide the overlay rather than leave it frozen on
-                    // its last position.
+                    // Locked: nothing to aim at, so hide the overlay rather
+                    // than leave it frozen on its last position.
                     reticleScreenPos = null
                     groundGridScreenLines = emptyList()
                     groundReticlePose = null
-                    groundPlane = null
                 }
+
+                // The per-frame placement readout that used to live here is
+                // gone along with the debug panel it fed.
+                //
+                // It was not free: it measured an anchor-to-camera distance,
+                // walked every trackable to count planes, and then wrote a
+                // fresh object into Compose state on EVERY tracked frame,
+                // which recomposed the whole overlay dozens of times a
+                // second for readouts nobody outside development read. The
+                // three values the new placement panel shows — anchor,
+                // model height, occlusion — all come from state that changes
+                // a handful of times per session, so they are read straight
+                // from it and cost nothing per frame.
             }
         )
 
@@ -1976,20 +2002,77 @@ private fun ArCameraLayer(
             onDispose {
                 placedNode?.let(childNodes::remove)
                 anchor?.detach()
-                earlyTerrainAnchor?.detach()
             }
         }
 
-        // "Place It Myself" ground grid + center reticle. Purely decorative
-        // — a plain Canvas with no pointerInput of its own, so it never
-        // intercepts the gestures the Box below (or ArOverlay's buttons)
-        // need to receive. Hidden automatically whenever there's nothing to
-        // show: both lists/positions are cleared in onSessionUpdated the
-        // moment manual placement isn't active.
-        PlacementGuideOverlay(
-            reticle = reticleScreenPos,
-            gridLines = groundGridScreenLines
-        )
+        // Optional smoke plumes (admin panel: AR scene → Smoke), drawn from
+        // the small effects/mobile-smoke.glb asset beside the ruins — see
+        // MobileSmokeEffect. That class and the admin settings existed, but
+        // nothing ever created the effect, so smoke never appeared.
+        //
+        // Keyed on the placed model node: created once the model stands in
+        // the scene, destroyed on Reset Placement (the node goes away) and
+        // on leaving the screen. Declared AFTER ARScene(...) for the same
+        // reason as the anchor clean-up above — it must be torn down while
+        // the engine and model loader still exist.
+        val smokeSettings = site?.arSmoke
+        DisposableEffect(modelNode, smokeSettings) {
+            val ruins = modelNode
+            val settings = smokeSettings?.sanitized()
+            if (ruins != null && settings != null && settings.enabled && settings.emitters.isNotEmpty()) {
+                smokeEffectHolder.effect = runCatching {
+                    val smokeInstance = modelLoader.createModelInstance(SMOKE_ASSET_PATH)
+                    MobileSmokeEffect(modelLoader, smokeInstance, ruins, settings)
+                }.onFailure {
+                    Log.w("HistouryAR", "Smoke effect unavailable", it)
+                }.getOrNull()
+            }
+            onDispose {
+                smokeEffectHolder.effect?.destroy()
+                smokeEffectHolder.effect = null
+            }
+        }
+
+        // Ground grid + center reticle. Purely decorative — a plain Canvas
+        // with no pointerInput of its own, so it never intercepts the
+        // gestures the Box below (or ArOverlay's buttons) need to receive.
+        // Hidden automatically whenever there's nothing to show: both
+        // lists/positions are cleared in onSessionUpdated the moment
+        // placement is locked.
+        PlacementGuideOverlay(placementGuide)
+
+        // The GLB can take a while on a slow connection (it's usually
+        // prefetched, but not always). Nothing used to say so: the camera
+        // was up, a tap made an anchor, and no structure appeared. Shown
+        // until the model is in memory; a load failure moves the screen to
+        // its error state instead.
+        val modelStillLoading = !site?.arModelUrl.isNullOrBlank() &&
+            modelInstance == null &&
+            (uiState.stage == ArStage.MANUAL_ALIGNING || uiState.stage == ArStage.PLACED)
+
+        if (modelStillLoading) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .padding(horizontal = 18.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = "Loading 3D model…",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
 
         // Compass, only while there's an active placement decision to make —
         // gone the instant the structure is locked, so it never lingers over
@@ -1998,8 +2081,15 @@ private fun ArCameraLayer(
             CompassIndicator(
                 headingDegrees = rememberCompassHeading(),
                 modifier = Modifier
+                    // statusBarsPadding, like the back and info buttons this
+                    // now shares a row with. Without it the disc sat 16dp
+                    // from the physical top of the screen, which on a phone
+                    // with a centred cutout put it under the camera hole and
+                    // left it at a different height from the two controls
+                    // either side of it.
                     .align(Alignment.TopCenter)
-                    .padding(top = 16.dp)
+                    .statusBarsPadding()
+                    .padding(top = 4.dp)
             )
         }
 
@@ -2018,19 +2108,53 @@ private fun ArCameraLayer(
         ArOverlay(
             uiState = uiState,
             isCapturing = isCapturing,
-            debug = debug,
-            showDebug = showDebug,
-            onToggleDebug = { showDebug = !showDebug },
+            placement = ArPlacementSummary(
+                anchorAttached = anchor != null,
+                // Model units times the factor actually applied to the node,
+                // which is what makes this a real-world height rather than
+                // an arbitrary number out of the GLB.
+                modelHeightMeters = measuredModelHeight * appliedScaleFactor,
+                occlusionSupported = depthSupported,
+                occlusionOn = depthSupported && occlusionEnabled
+            ),
+            showPlacementSettings = showPlacementSettings,
+            onTogglePlacementSettings = { showPlacementSettings = !showPlacementSettings },
             occlusionEnabled = occlusionEnabled,
             onToggleOcclusion = { occlusionEnabled = !occlusionEnabled },
             onShowInfo = { onShowSiteInfoChange(true) },
-            studioLighting = studioLighting,
-            onToggleLighting = {
-                ArLightingPreference.useNeutralLighting = !studioLighting
+            chromeVisible = chromeVisible,
+            onRevealChrome = { chromeWake++ },
+            arNotice = arNotice,
+            // Double tap is the unlock. It only ever reaches here from a
+            // gesture that stayed still and lifted twice, so a pinch, a
+            // drag or a twist cannot land on it, and the shutter consumes
+            // its own taps before this surface sees them.
+            onDoubleTap = {
+                if (uiState.stage == ArStage.PLACED) {
+                    viewModel.unlockManualPlacement()
+                }
+            },
+            cameraZoom = cameraZoom,
+            onCameraZoom = { factor ->
+                // Clamped, and clamped here rather than in the gesture, so
+                // the pinch can be pushed past the end and come straight
+                // back without having to travel through the slack that an
+                // unclamped accumulator would have banked.
+                cameraZoom = (cameraZoom * factor)
+                    .coerceIn(MIN_CAMERA_ZOOM, MAX_CAMERA_ZOOM)
+            },
+            modelBrightness = modelBrightness,
+            onCycleBrightness = {
+                // Wraps rather than stopping at the top, so the control
+                // always comes back round to the untouched 1.0 look instead
+                // of dead-ending at maximum with no way down. A level that
+                // somehow isn't one of the steps also resolves to 1.0.
+                val next = MODEL_BRIGHTNESS_STEPS.indexOf(modelBrightness) + 1
+                ArLightingPreference.brightnessBoost = MODEL_BRIGHTNESS_STEPS[
+                    if (next in MODEL_BRIGHTNESS_STEPS.indices) next else 0
+                ]
             },
             onCapture = onCapture,
-            onRetry = viewModel::retrySearch,
-            onStartManual = viewModel::startManualPlacement,
             onLockManual = viewModel::lockManualPlacement,
             onUnlockManual = viewModel::unlockManualPlacement,
             onResetManual = resetManualPlacement,
@@ -2042,15 +2166,21 @@ private fun ArCameraLayer(
                 pendingPlaceTap = true
             },
             onDrag = { dx, dy ->
-                // Horizontal drag slides the structure left and right;
-                // vertical drag pushes it away and pulls it closer. Both in
-                // the anchor's local frame, which is levelled and yawed to
-                // face the visitor, so the mapping stays intuitive as they
-                // walk around.
+                // Mapped through the camera's current ground orientation
+                // (dragBasis, recomputed each frame above) rather than
+                // straight onto the anchor's fixed axes, so "right" keeps
+                // meaning right after the visitor has walked around the
+                // structure. Drag down pulls it toward the viewer.
+                val forwardComponent = -dy
+
                 manualPosition = Position(
-                    manualPosition.x + dx * MANUAL_DRAG_METERS_PER_PIXEL,
+                    manualPosition.x +
+                        (dx * dragBasis[0] + forwardComponent * dragBasis[2]) *
+                        MANUAL_DRAG_METERS_PER_PIXEL,
                     manualPosition.y,
-                    manualPosition.z + dy * MANUAL_DRAG_METERS_PER_PIXEL
+                    manualPosition.z +
+                        (dx * dragBasis[1] + forwardComponent * dragBasis[3]) *
+                        MANUAL_DRAG_METERS_PER_PIXEL
                 )
             },
             onNudgeHeight = { delta ->
@@ -2066,6 +2196,10 @@ private fun ArCameraLayer(
                 // THE LAST tick (e.g. 1.02 = 2% bigger since a moment ago),
                 // so multiplying it into the running total is what makes a
                 // long, slow pinch add up smoothly instead of jumping.
+                //
+                // Uniform by construction — one multiplier, applied to X, Y
+                // and Z alike in the scale effect above, so the structure
+                // can never be stretched out of proportion.
                 manualScaleMultiplier = (manualScaleMultiplier * zoomFactor)
                     .coerceIn(MANUAL_SCALE_MIN, MANUAL_SCALE_MAX)
             },
@@ -2074,7 +2208,8 @@ private fun ArCameraLayer(
                 // rotation SINCE THE LAST tick, added onto the running yaw
                 // rather than replacing it, so the model tracks the twist
                 // gesture continuously and simply stays at whatever angle it
-                // reaches when the fingers lift — no snapping, no reset.
+                // reaches when the fingers lift — no snapping, no reset, and
+                // never any automatic turn to face the camera.
                 //
                 // If this reads as turning the wrong way once tested
                 // on-device, flip the sign here — this is the one line that
@@ -2093,68 +2228,166 @@ private fun ArCameraLayer(
  * (see worldToScreen/buildGroundGridScreenLines). No pointerInput, so it
  * never competes with the gesture surface or the control cards for touches.
  */
+private const val SMOKE_ASSET_PATH = "effects/mobile-smoke.glb"
+
+private class SmokeEffectHolder {
+    var effect: MobileSmokeEffect? = null
+}
+
+@Stable
+private class PlacementGuideState {
+    var reticle by mutableStateOf<Offset?>(null)
+    var gridLines by mutableStateOf<List<Pair<Offset, Offset>>>(emptyList())
+}
+
 @Composable
-private fun PlacementGuideOverlay(
-    reticle: Offset?,
-    gridLines: List<Pair<Offset, Offset>>
-) {
-
-    if (reticle == null && gridLines.isEmpty()) return
-
-    // Resolved here, in the composable body, and captured by the draw
-    // lambda below rather than read inside it: AccentGold is a
-    // @Composable/@ReadOnlyComposable property (it comes from
-    // LocalHistouryColors.current), and Canvas's draw lambda is a plain
-    // DrawScope.() -> Unit — not itself a composable context — so reading
-    // a @Composable color getter directly inside it fails to compile.
-    val centerDotColor = AccentGold
+private fun PlacementGuideOverlay(state: PlacementGuideState) {
 
     ComposeCanvas(modifier = Modifier.fillMaxSize()) {
 
+        // Read HERE, in the draw phase, not in composition: a new frame's
+        // points only re-run this block. Nothing to show draws nothing.
+        val reticle = state.reticle
+        val gridLines = state.gridLines
+        if (reticle == null && gridLines.isEmpty()) return@ComposeCanvas
+
+        // Leaded glass, not tinted plastic.
+        //
+        // The guide used to be flat translucent white lines with a coral dot
+        // at the centre, and flat translucent anything over a camera feed
+        // reads as a sheet of plastic laid on the lens — there is no
+        // thickness to it and no sense that light is passing through.
+        //
+        // What makes glass look like glass is the edge: a dark came holding
+        // each pane, a bright rim where the light catches it, and a faint
+        // halo bleeding into what is behind. So every line here is drawn
+        // three times, widest and darkest first, and the coral is gone —
+        // white glass takes its colour from the scene it is standing in
+        // front of, which for a reconstruction is exactly right.
         gridLines.forEach { (start, end) ->
+
+            // Halation: the glow around a lit pane.
             drawLine(
-                color = Color.White.copy(alpha = 0.35f),
+                color = Color.White.copy(alpha = 0.07f),
                 start = start,
                 end = end,
-                strokeWidth = 2f
+                strokeWidth = 9f,
+                cap = StrokeCap.Round
+            )
+
+            // The came — the dark lead that holds the pane, and the reason
+            // the bright line on top reads as glass rather than as paint.
+            drawLine(
+                color = Color.Black.copy(alpha = 0.30f),
+                start = start,
+                end = end,
+                strokeWidth = 4.5f,
+                cap = StrokeCap.Round
+            )
+
+            // The lit edge of the glass itself.
+            drawLine(
+                color = Color.White.copy(alpha = 0.80f),
+                start = start,
+                end = end,
+                strokeWidth = 1.6f,
+                cap = StrokeCap.Round
             )
         }
 
         reticle?.let { center ->
 
-            // Outer ring, a small solid center dot, and four short crosshair
-            // ticks — a plain, minimal "target" reticle rather than anything
-            // elaborate, so it reads instantly as "this exact point" without
-            // competing visually with the camera feed behind it.
+            // Same three-pass treatment on the ring, so the target reads as
+            // part of the same glasswork rather than as a separate widget.
             drawCircle(
-                color = Color.White.copy(alpha = 0.9f),
-                radius = 26f,
+                color = Color.White.copy(alpha = 0.07f),
+                radius = 27f,
                 center = center,
-                style = Stroke(width = 3f)
+                style = Stroke(width = 10f)
             )
 
             drawCircle(
-                color = centerDotColor,
-                radius = 6f,
+                color = Color.Black.copy(alpha = 0.30f),
+                radius = 26f,
+                center = center,
+                style = Stroke(width = 5f)
+            )
+
+            drawCircle(
+                color = Color.White.copy(alpha = 0.88f),
+                radius = 26f,
+                center = center,
+                style = Stroke(width = 2f)
+            )
+
+            // The one piece of colour, and it is dispersion rather than a
+            // tint: a sweep of pale cool-to-warm whites around an inner ring,
+            // the way a bevelled edge throws light. Kept under half opacity
+            // and off the centre, so at a glance the guide is simply white
+            // and the colour only appears if somebody looks for it.
+            drawCircle(
+                brush = Brush.sweepGradient(
+                    colors = listOf(
+                        Color(0xFFDCE9FF),
+                        Color(0xFFEFFFF6),
+                        Color(0xFFFFF6DE),
+                        Color(0xFFFFE9EC),
+                        Color(0xFFDCE9FF)
+                    ),
+                    center = center
+                ),
+                radius = 15f,
+                center = center,
+                style = Stroke(width = 1.6f),
+                alpha = 0.45f
+            )
+
+            // Centre: clear glass with a bright core, in place of the solid
+            // coral dot. It still marks the exact point — a white core on a
+            // dark ring is if anything easier to find against a sunlit
+            // facade than a warm dot was.
+            drawCircle(
+                color = Color.Black.copy(alpha = 0.28f),
+                radius = 5.5f,
                 center = center
             )
 
+            drawCircle(
+                color = Color.White,
+                radius = 3.5f,
+                center = center
+            )
+
+            // Crosshair ticks, came and lit edge.
             val tickInner = 14f
             val tickOuter = 30f
             listOf(
                 Offset(-1f, 0f), Offset(1f, 0f), Offset(0f, -1f), Offset(0f, 1f)
             ).forEach { direction ->
+
+                val tickStart = Offset(
+                    center.x + direction.x * tickInner,
+                    center.y + direction.y * tickInner
+                )
+                val tickEnd = Offset(
+                    center.x + direction.x * tickOuter,
+                    center.y + direction.y * tickOuter
+                )
+
                 drawLine(
-                    color = Color.White.copy(alpha = 0.9f),
-                    start = Offset(
-                        center.x + direction.x * tickInner,
-                        center.y + direction.y * tickInner
-                    ),
-                    end = Offset(
-                        center.x + direction.x * tickOuter,
-                        center.y + direction.y * tickOuter
-                    ),
-                    strokeWidth = 3f
+                    color = Color.Black.copy(alpha = 0.30f),
+                    start = tickStart,
+                    end = tickEnd,
+                    strokeWidth = 5f,
+                    cap = StrokeCap.Round
+                )
+
+                drawLine(
+                    color = Color.White.copy(alpha = 0.92f),
+                    start = tickStart,
+                    end = tickEnd,
+                    strokeWidth = 2f,
+                    cap = StrokeCap.Round
                 )
             }
         }
@@ -2295,17 +2528,21 @@ private fun CompassIndicator(headingDegrees: Float, modifier: Modifier = Modifie
 private fun ArOverlay(
     uiState: ArUiState,
     isCapturing: Boolean,
-    debug: ArPlacementDebug?,
-    showDebug: Boolean,
-    onToggleDebug: () -> Unit,
+    placement: ArPlacementSummary,
+    showPlacementSettings: Boolean,
+    onTogglePlacementSettings: () -> Unit,
     occlusionEnabled: Boolean,
     onToggleOcclusion: () -> Unit,
     onShowInfo: () -> Unit,
-    studioLighting: Boolean,
-    onToggleLighting: () -> Unit,
+    chromeVisible: Boolean,
+    onRevealChrome: () -> Unit,
+    arNotice: ArNotice?,
+    onDoubleTap: () -> Unit,
+    cameraZoom: Float,
+    onCameraZoom: (Float) -> Unit,
+    modelBrightness: Float,
+    onCycleBrightness: () -> Unit,
     onCapture: () -> Unit,
-    onRetry: () -> Unit,
-    onStartManual: () -> Unit,
     onLockManual: () -> Unit,
     onUnlockManual: () -> Unit,
     onResetManual: () -> Unit,
@@ -2316,6 +2553,74 @@ private fun ArOverlay(
     onScale: (Float) -> Unit,
     onRotate: (Float) -> Unit
 ) {
+
+    // ----- first-run tutorials, one per stage of the experience -----
+
+    TutorialTour(
+        id = "ar_intro",
+        enabled = uiState.stage == ArStage.MANUAL_ALIGNING,
+        steps = listOf(
+            TutorialStep(
+                target = null,
+                title = "See the past in AR",
+                body = "Your camera shows the site, and Histoury places a 3D model of how it once looked. Hold your phone up and move slowly."
+            ),
+            TutorialStep(
+                target = null,
+                title = "First, find the ground",
+                body = "Point the camera at the ground a few steps ahead and move it gently until a grid appears. Then tap where the model should stand."
+            ),
+            TutorialStep(
+                target = "ar_settings",
+                title = "Settings",
+                body = "Adjust how the model is shown, like brightness and whether people and objects can appear in front of it."
+            )
+        )
+    )
+
+    TutorialTour(
+        id = "ar_adjust",
+        enabled = uiState.stage == ArStage.MANUAL_ALIGNING && manualAnchorPlaced,
+        steps = listOf(
+            TutorialStep(
+                target = "ar_align_card",
+                title = "Move it into place",
+                body = "Drag with one finger to slide the model, pinch to resize it, and twist with two fingers to turn it. Use Height to raise or lower it."
+            ),
+            TutorialStep(
+                target = "ar_scale_bar",
+                title = "Fine-tune",
+                body = "Prefer buttons? Make it bigger or smaller, or turn it left or right a little at a time."
+            ),
+            TutorialStep(
+                target = "ar_lock",
+                title = "Lock it in place",
+                body = "Once it lines up with the real site, lock it so it stays put while you walk around and take photos."
+            )
+        )
+    )
+
+    TutorialTour(
+        id = "ar_placed",
+        enabled = uiState.stage == ArStage.PLACED,
+        steps = listOf(
+            TutorialStep(
+                target = "ar_capture",
+                title = "Take a photo",
+                body = "Capture the site with its reconstruction. Next you can pick a period filter, like Old Photograph, then save it to your phone and Gallery."
+            ),
+            TutorialStep(
+                target = "ar_info",
+                title = "About this site",
+                body = "Read the site's history without leaving AR."
+            ),
+            TutorialStep(
+                target = "ar_lock",
+                title = "Need to move it again?",
+                body = "Tap Unlock, or double-tap the screen, to adjust the model again."
+            )
+        )
+    )
 
     // The whole overlay drops to zero alpha for the shutter frame rather
     // than being removed from composition: unmounting it would tear down the
@@ -2382,379 +2687,731 @@ private fun ArOverlay(
                         // consumption behavior: every change, on every
                         // pointer, every frame of the gesture, is consumed
                         // here directly.
+                        //
+                        // It now reads two things out of the gestures it
+                        // swallows, rather than only discarding them: the
+                        // distance between two fingers, which drives the
+                        // digital zoom, and whether a touch finished without
+                        // ever becoming a drag, which is a tap and brings the
+                        // hidden controls back.
+                        //
+                        // Written out by hand rather than layering
+                        // detectTransformGestures and detectTapGestures on
+                        // top, because those consume only once their own slop
+                        // is exceeded — and the hole that leaves is exactly
+                        // the one this shield exists to close: a thumb
+                        // resting on the glass and creeping a few pixels
+                        // while its owner walks closer. Here every change is
+                        // consumed from the first frame of the gesture,
+                        // whatever it turns out to be.
+                        // Carried ACROSS gestures, which is what makes a
+                        // double tap detectable at all: each awaitEachGesture
+                        // body handles one touch from press to release, so
+                        // the memory of the previous one has to live out here
+                        // in the pointerInput block.
+                        var lastTapUptime = 0L
+                        var lastTapPosition = Offset.Zero
+
                         awaitEachGesture {
-                            do {
+
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            down.consume()
+
+                            var movedBeyondTap = false
+                            var previousSpan = 0f
+
+                            while (true) {
+
                                 val event = awaitPointerEvent()
+                                val pressed = event.changes.filter { it.pressed }
+
+                                if (pressed.isEmpty()) break
+
+                                if (pressed.size >= 2) {
+
+                                    val span = (pressed[0].position - pressed[1].position)
+                                        .getDistance()
+
+                                    // Ratio against the previous frame's
+                                    // span, which is what makes the zoom
+                                    // track the fingers continuously the way
+                                    // a camera app does, instead of stepping.
+                                    if (previousSpan > 0f && span > 0f) {
+                                        val factor = span / previousSpan
+                                        if (factor != 1f) onCameraZoom(factor)
+                                        movedBeyondTap = true
+                                    }
+
+                                    previousSpan = span
+
+                                } else {
+
+                                    // A second finger lifting must not be
+                                    // read as a huge pinch on the next frame.
+                                    previousSpan = 0f
+
+                                    if ((pressed[0].position - down.position).getDistance() >
+                                        viewConfiguration.touchSlop
+                                    ) {
+                                        movedBeyondTap = true
+                                    }
+                                }
+
                                 event.changes.forEach { it.consume() }
-                            } while (event.changes.any { it.pressed })
+                            }
+
+                            // Anything that became a drag or a pinch is not a
+                            // tap and ends here. That is what keeps zooming,
+                            // dragging and twisting from ever unlocking the
+                            // structure: they have all set movedBeyondTap
+                            // long before a finger lifts.
+                            if (movedBeyondTap) return@awaitEachGesture
+
+                            val now = down.uptimeMillis
+
+                            val isDoubleTap =
+                                lastTapUptime > 0L &&
+                                    now - lastTapUptime <= viewConfiguration.doubleTapTimeoutMillis &&
+                                    (down.position - lastTapPosition).getDistance() <=
+                                    viewConfiguration.touchSlop * 2f
+
+                            if (isDoubleTap) {
+
+                                // Cleared rather than updated, so three taps
+                                // in a row are one double tap and then a
+                                // fresh single — not two overlapping
+                                // unlocks off the middle tap.
+                                lastTapUptime = 0L
+                                onDoubleTap()
+
+                            } else {
+
+                                lastTapUptime = now
+                                lastTapPosition = down.position
+
+                                // Fired immediately rather than after waiting
+                                // out the double-tap window. Revealing the
+                                // controls is harmless and reversible, and
+                                // holding every single tap for 300ms to find
+                                // out whether a second one is coming would
+                                // make the common gesture feel broken to
+                                // save the rare one a redundant reveal.
+                                onRevealChrome()
+                            }
                         }
                     }
             )
         }
 
-        AnimatedVisibility(
-            visible = uiState.stage == ArStage.SEARCHING ||
-                uiState.stage == ArStage.ANCHORING,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 90.dp, start = 20.dp, end = 20.dp)
-        ) {
-            SearchingCard(uiState = uiState)
-        }
-
-        AnimatedVisibility(
-            visible = uiState.stage == ArStage.TRACKING_LOST,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 90.dp, start = 20.dp, end = 20.dp)
-        ) {
-            HintCard(
-                title = if (uiState.placedBy == PlacementSource.GEOSPATIAL) {
-                    "Location tracking paused"
-                } else {
-                    "Lost sight of the structure"
-                },
-                body = if (uiState.placedBy == PlacementSource.GEOSPATIAL) {
-                    "The model is still where it was placed. Point the camera " +
-                        "at the surrounding buildings to keep it accurate."
-                } else {
-                    "The model is still where it was last seen. Point the " +
-                        "camera back at the structure to re-align it."
-                }
-            )
-        }
-
-        AnimatedVisibility(
-            visible = uiState.stage == ArStage.NOT_RECOGNIZED,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 90.dp, start = 20.dp, end = 20.dp)
-        ) {
-            HintCard(
-                title = if (uiState.useImage) {
-                    "Couldn't recognize the structure"
-                } else {
-                    "Couldn't find your exact location"
-                },
-                body = uiState.unavailableReason.ifBlank {
-                    if (uiState.useImage) {
-                        "Stand facing the structure so it fills most of the screen, " +
-                            "with nothing blocking it. Strong shadow, glare or a " +
-                            "steep angle can all prevent a match."
-                    } else {
-                        "Your location couldn't be pinned down precisely enough. " +
-                            "Step into a more open spot and point the camera at " +
-                            "nearby buildings, then try again."
-                    }
-                },
-                actionLabel = "Try again",
-                onAction = onRetry,
-                secondaryActionLabel = "Place it myself",
-                onSecondaryAction = onStartManual
-            )
-        }
-
-        AnimatedVisibility(
-            visible = uiState.stage == ArStage.MANUAL_ALIGNING,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 90.dp, start = 20.dp, end = 20.dp)
-        ) {
-            ManualAlignCard(
-                hasPlaced = manualAnchorPlaced,
-                onLock = onLockManual,
-                onReset = onResetManual,
-                onNudgeHeight = onNudgeHeight
-            )
-        }
-
-        AnimatedVisibility(
-            visible = uiState.stage == ArStage.PLACED && uiState.placementIsManual,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 90.dp, start = 20.dp, end = 20.dp)
-        ) {
-            HintCard(
-                title = "Placed by hand",
-                body = "This structure was positioned manually, so it may not " +
-                    "line up exactly with the real one.",
-                actionLabel = "Unlock to reposition",
-                onAction = onUnlockManual
-            )
-        }
-
-        // Explicit resize/rotate buttons for "Place It Myself", alongside
-        // (not instead of) the pinch/twist gestures on the manipulate
-        // surface above — some people find precise button taps easier than
-        // a two-finger gesture, especially for fine adjustments. Bottom
-        // placement, mirroring the shutter's spot once the structure is
-        // placed: the two never show at once (this is MANUAL_ALIGNING only,
-        // the shutter is PLACED/TRACKING_LOST only), so they can share the
-        // same reserved space without a layout conflict.
-        AnimatedVisibility(
-            visible = uiState.stage == ArStage.MANUAL_ALIGNING && manualAnchorPlaced,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 44.dp)
-        ) {
-            ManualScaleRotateBar(
-                onScaleDown = { onScale(1f / MANUAL_SCALE_STEP_FACTOR) },
-                onScaleUp = { onScale(MANUAL_SCALE_STEP_FACTOR) },
-                onRotateLeft = { onRotate(-MANUAL_ROTATE_STEP_DEGREES) },
-                onRotateRight = { onRotate(MANUAL_ROTATE_STEP_DEGREES) }
-            )
-        }
-
-        // Shutter, centred on its own. The info shortcut used to sit beside
-        // it, balanced by an invisible spacer on the other side — a fragile
-        // trick that only stayed centred as long as the label under the Info
-        // icon never wrapped. It now lives in the top-right corner, mirroring
-        // the back button, which is both simpler and reads less awkwardly:
-        // two small round controls bookend the top of the screen the way
-        // they do in most camera apps, and the shutter row is just the
-        // shutter.
+        // ------------------------------------------------- the status band
         //
-        // Visible only once the model is PLACED. Offering it earlier would
-        // mean a photo of an empty facade. TRACKING_LOST counts as placed
-        // here: ARCore drops to LAST_KNOWN_POSE constantly in normal use —
-        // step close enough to look at the model and the reference photo
-        // leaves the frame — and gating on PLACED alone made the shutter
-        // blink out exactly when a visitor was near enough to want it.
-        AnimatedVisibility(
-            visible = uiState.stage == ArStage.PLACED ||
-                uiState.stage == ArStage.TRACKING_LOST,
+        // One column, not five things each positioned by hand.
+        //
+        // They used to be independent children of the overlay's Box, every
+        // one of them anchored at the same 90dp from the top: the coaching
+        // card, the left-the-site warning, the align card, the locked pill
+        // and the settings chip, plus the capture receipt from the layer
+        // above. Whenever two were on screen together they were drawn on top
+        // of one another, which is most of the time — the settings chip is
+        // visible in every stage, so it collided with whichever card the
+        // stage happened to be showing.
+        //
+        // Stacking them makes the overlap impossible rather than unlikely.
+        // A hidden AnimatedVisibility measures to zero height and the column
+        // closes up around it, so whatever is showing sits directly under
+        // whatever is above it, in every combination, without any stage
+        // needing to know what else might be on screen.
+        //
+        // Spacing goes INSIDE each block rather than on the column's
+        // arrangement, because Arrangement.spacedBy would also space the
+        // hidden ones and push the visible card down by a gap per absent
+        // sibling.
+        Column(
             modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 44.dp)
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                // Measured from below the status bar rather than from the
+                // physical top of the screen, so the gap is the same on a
+                // phone with a tall cutout as on one without. 72dp clears
+                // the row above it — the 64dp compass disc, and the back and
+                // info buttons either side of it — with a little air left.
+                .statusBarsPadding()
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
+                .padding(top = 72.dp, start = 20.dp, end = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            CaptureButton(
-                isSaving = uiState.isSavingCapture,
-                onClick = onCapture
-            )
-        }
 
-        // Info shortcut, mirroring the back button in the opposite corner.
-        AnimatedVisibility(
-            visible = uiState.stage == ArStage.PLACED ||
-                uiState.stage == ArStage.TRACKING_LOST,
-            modifier = Modifier.align(Alignment.TopEnd)
-        ) {
-            InfoButton(onClick = onShowInfo)
-        }
+            // Placement settings. Folded away with the rest of the chrome in
+            // photo mode — adjusting occlusion or brightness is a setup-time
+            // concern, and a visitor framing a photograph is past it.
+            //
+            // Start-aligned inside the centred column so it keeps the
+            // top-left position it reads best in, without being anchored
+            // independently of the cards it has to stay clear of.
+            //
+            // The panel now opens from the settings icon in the corner above
+            // rather than carrying its own labelled chip. Keeping it as the
+            // first item in this column rather than floating it under the
+            // icon is what stops an open panel from covering the placement
+            // card: the column pushes everything else down instead.
+            AnimatedVisibility(
+                visible = showPlacementSettings && chromeVisible,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.Start)
+            ) {
+                PlacementSettingsPanel(
+                    placement = placement,
+                    occlusionEnabled = occlusionEnabled,
+                    onToggleOcclusion = onToggleOcclusion,
+                    modelBrightness = modelBrightness,
+                    onCycleBrightness = onCycleBrightness
+                )
+            }
 
-        // Diagnostic chip. Deliberately small and unlabelled-looking rather
-        // than hidden behind a build flag: the failure it explains only
-        // reproduces in front of the real structure, on a release build, in
-        // the hands of whoever is doing the site walk.
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(top = 90.dp, start = 20.dp)
-        ) {
-            Column {
+            // Coaching while ARCore has no floor to offer yet. There is
+            // nothing being recognised and nothing being localised any more,
+            // so this is the only thing a visitor ever waits on.
+            AnimatedVisibility(
+                visible = uiState.stage == ArStage.MANUAL_ALIGNING &&
+                    !manualAnchorPlaced && !uiState.groundFound
+            ) {
+                Column {
+                    Spacer(Modifier.height(10.dp))
+                    FindingGroundCard()
+                }
+            }
 
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(Color.Black.copy(alpha = 0.45f))
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = onToggleDebug
-                        )
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                ) {
-                    Text(
-                        text = if (showDebug) "Hide placement info" else "Placement info",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color.White.copy(alpha = 0.85f)
+            // Walked out of the site while nothing is placed yet. The
+            // structure belongs to this place, so it doesn't get deployed
+            // from outside it.
+            AnimatedVisibility(
+                visible = uiState.leftSiteArea && !manualAnchorPlaced
+            ) {
+                Column {
+                    Spacer(Modifier.height(10.dp))
+                    HintCard(
+                        title = "You've left the site",
+                        body = "This structure can only be placed while you're at the " +
+                            "historical site itself. Head back inside the site area to " +
+                            "place it."
                     )
                 }
+            }
 
-                if (showDebug && debug != null) {
-
-                    Spacer(Modifier.height(6.dp))
-
-                    Column(
-                        modifier = Modifier
-                            .widthIn(max = 250.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color.Black.copy(alpha = 0.72f))
-                            .padding(12.dp)
-                    ) {
-
-                        DebugRow("Model loaded", if (debug.modelLoaded) "yes" else "NO")
-                        DebugRow("Model file", "${debug.modelBytes / 1024} KB")
-                        DebugRow("Anchor", if (debug.anchorAttached) "attached" else "NO")
-                        DebugRow("Placed by", debug.placedBy)
-                        DebugRow("Photos", debug.photos)
-                        DebugRow("Geospatial", debug.geospatial)
-                        DebugRow(
-                            "Model size",
-                            if (debug.explicitModelSize > 0) {
-                                String.format("%.1f m (admin)", debug.explicitModelSize)
-                            } else {
-                                "from photo"
-                            }
-                        )
-                        DebugRow("Node in scene", if (debug.nodeInScene) "yes" else "NO")
-                        DebugRow("Distance", String.format("%.2f m", debug.distanceMeters))
-                        // The three numbers that now explain the size, in
-                        // the order they are used: what the model measures,
-                        // what the structure inside the photo measures, and
-                        // the factor between them. If a model is the wrong
-                        // size on site, one of these says why.
-                        DebugRow(
-                            "Model height",
-                            if (debug.modelHeightUnits > 0) {
-                                String.format("%.2f units", debug.modelHeightUnits)
-                            } else {
-                                "measuring…"
-                            }
-                        )
-                        DebugRow(
-                            "Structure height",
-                            if (debug.scaleLocked) {
-                                String.format("%.2f m (locked)", debug.structureHeightMeters)
-                            } else {
-                                String.format("%.2f m (settling)", debug.extentZ)
-                            }
-                        )
-                        DebugRow(
-                            "Scale factor",
-                            if (debug.appliedScale > 0) {
-                                String.format("x %.3f", debug.appliedScale)
-                            } else {
-                                "not applied yet"
-                            }
-                        )
-                        DebugRow(
-                            "Image extent",
-                            String.format("%.2f x %.2f m", debug.extentX, debug.extentZ)
-                        )
-                        DebugRow(
-                            "Offsets R/U/F",
-                            String.format(
-                                "%.1f / %.1f / %.1f",
-                                debug.offsetRight,
-                                debug.offsetUp,
-                                debug.offsetForward
-                            )
-                        )
-                        DebugRow("Tracking", debug.trackingMethod)
-                        DebugRow("Occlusion", if (debug.occlusionOn) "on" else "off")
-                        DebugRow(
-                            "Lighting",
-                            if (debug.studioLighting) "neutral" else "room estimate"
-                        )
-                        DebugRow("Materials", "${debug.materialCount} (matte)")
-                        DebugRow(
-                            "Animations",
-                            if (debug.animationCount == 0) {
-                                "none"
-                            } else {
-                                "${debug.animationCount} playing"
-                            }
-                        )
-
-                        Spacer(Modifier.height(8.dp))
-
-                        // The first thing to try when the structure is
-                        // recognised and nothing draws. If the model appears
-                        // the moment this goes off, it was behind the real
-                        // wall the whole time and Offset Forward is too small.
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color.White.copy(alpha = 0.16f))
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null,
-                                    onClick = onToggleOcclusion
-                                )
-                                .padding(vertical = 8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = if (occlusionEnabled) {
-                                    "Occlusion on — tap to disable"
-                                } else {
-                                    "Occlusion off — tap to enable"
-                                },
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                        }
-
-                        Spacer(Modifier.height(6.dp))
-
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color.White.copy(alpha = 0.16f))
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null,
-                                    onClick = onToggleLighting
-                                )
-                                .padding(vertical = 8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = if (studioLighting) {
-                                    "Use room lighting"
-                                } else {
-                                    "Use neutral lighting"
-                                },
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                        }
-
-                        Spacer(Modifier.height(5.dp))
-
-                        Text(
-                            text = "Lighting applies when AR is reopened.",
-                            fontSize = 9.5.sp,
-                            color = Color.White.copy(alpha = 0.6f)
+            AnimatedVisibility(
+                visible = uiState.stage == ArStage.MANUAL_ALIGNING &&
+                    !uiState.leftSiteArea &&
+                    (manualAnchorPlaced || uiState.groundFound)
+            ) {
+                Column {
+                    Spacer(Modifier.height(10.dp))
+                    Box(Modifier.tutorialTarget("ar_align_card")) {
+                        ManualAlignCard(
+                            hasPlaced = manualAnchorPlaced,
+                            onReset = onResetManual,
+                            onNudgeHeight = onNudgeHeight
                         )
                     }
                 }
+            }
+
+        }
+
+        // ------------------------------------------------ the bottom stack
+        //
+        // One column anchored to the bottom, above the system navigation bar,
+        // with each control stacked on the one below it and a fixed gap
+        // between them.
+        //
+        // These used to be separately positioned at fixed distances from the
+        // physical bottom edge (44, 116, 176 and 236dp). Those numbers
+        // assumed sizes that weren't true — the 74dp shutter reached 118dp,
+        // so the Lock pill at 116dp sat on top of it; the capture receipt at
+        // 170dp landed on the zoom readout at 176dp — and none of them
+        // accounted for a three-button navigation bar, which covered the
+        // shutter. A column can't overlap itself, and the insets move the
+        // whole stack up on phones that need it.
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
+                .padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+
+            // Capture receipt ("Saved to your Gallery"), just above the
+            // controls that produced it.
+            AnimatedVisibility(
+                visible = uiState.captureMessage != null,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .padding(bottom = BOTTOM_STACK_GAP)
+                        .clip(RoundedCornerShape(50))
+                        .background(Color.Black.copy(alpha = 0.75f))
+                        .padding(horizontal = 16.dp, vertical = 9.dp)
+                ) {
+                    Text(
+                        text = uiState.captureMessage.orEmpty(),
+                        color = Color.White,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
+            // Lock and unlock notices. Shown once, on the transition — this
+            // is how a visitor learns the double tap without the screen
+            // carrying a permanent instruction.
+            AnimatedVisibility(
+                visible = arNotice != null,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Box(Modifier.padding(bottom = BOTTOM_STACK_GAP)) {
+                    ArNoticeCard(
+                        title = arNotice?.title.orEmpty(),
+                        body = arNotice?.body.orEmpty()
+                    )
+                }
+            }
+
+            // The zoom readout, and only while it is saying something: at
+            // 1.0x it would be a permanent label reporting nothing.
+            AnimatedVisibility(
+                visible = uiState.stage == ArStage.PLACED && cameraZoom > MIN_CAMERA_ZOOM + 0.01f,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Box(Modifier.padding(bottom = BOTTOM_STACK_GAP)) {
+                    GlassPill(label = String.format("%.1fx", cameraZoom))
+                }
+            }
+
+            // Lock and unlock, as one floating glass control directly above
+            // the shutter (or the resize bar) in both states, so it doesn't
+            // appear to jump when the state changes.
+            AnimatedVisibility(
+                visible = chromeVisible && (
+                    uiState.stage == ArStage.PLACED ||
+                        (uiState.stage == ArStage.MANUAL_ALIGNING &&
+                            manualAnchorPlaced &&
+                            !uiState.leftSiteArea)
+                    ),
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                val locked = uiState.stage == ArStage.PLACED
+                Box(Modifier.padding(bottom = BOTTOM_STACK_GAP)) {
+                    Box(Modifier.tutorialTarget("ar_lock")) {
+                        GlassPill(
+                            icon = if (locked) Icons.Default.LockOpen else Icons.Default.Lock,
+                            label = if (locked) "Unlock" else "Lock in Place",
+                            onClick = if (locked) onUnlockManual else onLockManual
+                        )
+                    }
+                }
+            }
+
+            // The bottom slot: the resize/rotate bar while adjusting, the
+            // shutter once placed. The stages are exclusive, so the two never
+            // show together.
+            AnimatedVisibility(
+                visible = uiState.stage == ArStage.MANUAL_ALIGNING && manualAnchorPlaced,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Box(Modifier.tutorialTarget("ar_scale_bar")) {
+                    ManualScaleRotateBar(
+                        onScaleDown = { onScale(1f / MANUAL_SCALE_STEP_FACTOR) },
+                        onScaleUp = { onScale(MANUAL_SCALE_STEP_FACTOR) },
+                        onRotateLeft = { onRotate(-MANUAL_ROTATE_STEP_DEGREES) },
+                        onRotateRight = { onRotate(MANUAL_ROTATE_STEP_DEGREES) }
+                    )
+                }
+            }
+
+            // Visible only once the model is PLACED. Offering it earlier
+            // would mean a photo of an empty facade.
+            AnimatedVisibility(
+                visible = uiState.stage == ArStage.PLACED,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Box(Modifier.tutorialTarget("ar_capture")) {
+                    CaptureButton(
+                        isSaving = uiState.isSavingCapture,
+                        onClick = onCapture
+                    )
+                }
+            }
+        }
+
+        // Settings, in the corner the back button used to hold.
+        //
+        // An icon rather than the "Placement settings" chip it replaces: a
+        // permanent line of text naming a control is how an AR screen starts
+        // reading as a configuration page, and a tuning glyph carries it
+        // without spending a strip of the frame. The label survives as the
+        // content description and the long-press hint, so it is still there
+        // for anyone who needs it.
+        AnimatedVisibility(
+            visible = chromeVisible,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopStart)
+        ) {
+            Box(Modifier.tutorialTarget("ar_settings")) {
+                GlassIconButton(
+                    icon = Icons.Default.Tune,
+                    label = "Placement settings",
+                    onClick = onTogglePlacementSettings
+                )
+            }
+        }
+
+        // Site information, mirroring it in the opposite corner so the two
+        // read as a deliberate pair.
+        AnimatedVisibility(
+            visible = uiState.stage == ArStage.PLACED && chromeVisible,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopEnd)
+        ) {
+            Box(Modifier.tutorialTarget("ar_info")) {
+                GlassIconButton(
+                    icon = Icons.Default.Info,
+                    label = "Site information",
+                    onClick = onShowInfo
+                )
+            }
+        }
+
+    }
+}
+
+/**
+ * The collapsible settings card, lifted out of the overlay so the status
+ * band above can be a plain column of siblings rather than a pile of
+ * separately anchored boxes.
+ */
+@Composable
+private fun PlacementSettingsPanel(
+    placement: ArPlacementSummary,
+    occlusionEnabled: Boolean,
+    onToggleOcclusion: () -> Unit,
+    modelBrightness: Float,
+    onCycleBrightness: () -> Unit
+) {
+
+    // Laid out like ordinary phone settings: a name, one short line saying
+    // what it does, and the control. It used to be status readouts plus two
+    // buttons whose labels were whole sentences ("Occlusion on: real objects
+    // can hide the model — tap to disable") and a footnote.
+    Column(
+        modifier = Modifier
+            .widthIn(max = 300.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.Black.copy(alpha = 0.5f))
+            .border(
+                0.8.dp,
+                Color.White.copy(alpha = 0.18f),
+                RoundedCornerShape(16.dp)
+            )
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) {
+
+        // One line of status the visitor can act on.
+        Text(
+            text = when {
+                !placement.anchorAttached -> "Model not placed yet"
+                placement.modelHeightMeters > 0f ->
+                    String.format("Model placed \u00b7 %.1f m tall", placement.modelHeightMeters)
+                else -> "Model placed"
+            },
+            fontSize = 11.sp,
+            color = Color.White.copy(alpha = 0.7f)
+        )
+
+        Spacer(Modifier.height(6.dp))
+
+        ArSettingRow(
+            title = "Occlusion",
+            description = if (placement.occlusionSupported) {
+                "Lets real objects appear in front of the model."
+            } else {
+                "Not supported on this phone."
+            },
+            onClick = if (placement.occlusionSupported) onToggleOcclusion else null
+        ) {
+            Switch(
+                checked = placement.occlusionSupported && occlusionEnabled,
+                onCheckedChange = if (placement.occlusionSupported) {
+                    { onToggleOcclusion() }
+                } else {
+                    null
+                },
+                enabled = placement.occlusionSupported,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = Primary,
+                    uncheckedThumbColor = Color.White.copy(alpha = 0.9f),
+                    uncheckedTrackColor = Color.White.copy(alpha = 0.25f),
+                    uncheckedBorderColor = Color.Transparent
+                )
+            )
+        }
+
+        ArSettingRow(
+            title = "Model brightness",
+            description = "Tap to make the model lighter or darker.",
+            onClick = onCycleBrightness
+        ) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.White.copy(alpha = 0.18f))
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = String.format("%.2fx", modelBrightness),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
             }
         }
     }
 }
 
+/**
+ * One row of the AR settings panel: name, one short description, and the
+ * control on the right. The whole row is the tap target (at least 48dp),
+ * not just the small control.
+ */
 @Composable
-private fun DebugRow(label: String, value: String) {
+private fun ArSettingRow(
+    title: String,
+    description: String,
+    onClick: (() -> Unit)?,
+    control: @Composable () -> Unit
+) {
     Row(
-        modifier = Modifier.padding(bottom = 3.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onClick
+                    )
+                } else {
+                    Modifier
+                }
+            )
+            .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White
+            )
+            Text(
+                text = description,
+                fontSize = 11.sp,
+                lineHeight = 14.sp,
+                color = Color.White.copy(alpha = 0.7f)
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        control()
+    }
+}
+
+/**
+ * The two things worth interrupting for, and only on the transition.
+ *
+ * Both exist to teach the double tap without the screen having to carry a
+ * permanent instruction: a control that explains itself forever is a control
+ * nobody reads after the first time, and this one is sitting on top of a
+ * reconstruction somebody walked across a walled city to look at.
+ */
+private enum class ArNotice(val title: String, val body: String) {
+
+    LOCKED(
+        title = "AR Locked",
+        body = "Double-tap the screen to unlock."
+    ),
+
+    UNLOCKED(
+        title = "AR Unlocked",
+        body = "You can move, rotate, or resize the model again."
+    )
+}
+
+/**
+ * The glass card those notices appear in.
+ *
+ * Two lines rather than one, because the title alone states what happened
+ * and the body alone states what to do, and a visitor who has just locked a
+ * structure needs both. Non-interactive by design — it carries no dismiss,
+ * since anything that has to be dismissed is something else to deal with
+ * while holding a phone up at a building.
+ */
+@Composable
+private fun ArNoticeCard(title: String, body: String) {
+
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.Black.copy(alpha = 0.42f))
+            .border(
+                width = 0.8.dp,
+                color = Color.White.copy(alpha = 0.20f),
+                shape = RoundedCornerShape(16.dp)
+            )
+            .padding(horizontal = 16.dp, vertical = 11.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+
         Text(
-            text = label,
-            fontSize = 10.5.sp,
-            color = Color.White.copy(alpha = 0.6f),
-            modifier = Modifier.weight(1f)
+            text = title,
+            color = Color.White,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold
         )
+
+        Spacer(Modifier.height(2.dp))
+
         Text(
-            text = value,
-            fontSize = 10.5.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White
+            text = body,
+            color = Color.White.copy(alpha = 0.78f),
+            fontSize = 11.5.sp,
+            textAlign = TextAlign.Center,
+            lineHeight = 15.sp
         )
     }
 }
 
+/**
+ * The compact translucent control used in photo mode.
+ *
+ * Glass rather than a solid card, because everything in this overlay is
+ * sitting on top of the one thing the visitor came to look at. A dark,
+ * lightly translucent fill with a hairline highlight along its edge reads as
+ * a pane laid over the scene — the same trick iOS uses — and it stays
+ * legible against both a bright noon facade and a dim arcade, which a plain
+ * low-alpha scrim does not.
+ *
+ * No real backdrop blur: Compose's blur modifier cannot sample a SurfaceView
+ * beneath it, which is exactly what the AR view is, so a blur here would
+ * cost GPU time every frame and show nothing. The border and the layered
+ * fill carry the effect instead, for free.
+ */
 @Composable
-private fun SearchingCard(uiState: ArUiState) {
+private fun GlassPill(
+    label: String,
+    icon: ImageVector? = null,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+    onClick: (() -> Unit)? = null
+) {
 
-    val geo = uiState.geoStatus
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(Color.Black.copy(alpha = 0.32f))
+            .border(
+                width = 0.8.dp,
+                color = Color.White.copy(alpha = 0.22f),
+                shape = RoundedCornerShape(50)
+            )
+            // Two ways to be interactive, and they are not the same thing:
+            // onClick makes the whole pill a button (lock, unlock), while
+            // onAction hangs a secondary word off the end of a pill that is
+            // otherwise a label. A pill never wants both, so whichever is
+            // supplied is the one that reads.
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onClick
+                    )
+                } else {
+                    Modifier
+                }
+            )
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+
+        if (icon != null) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+        }
+
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White
+        )
+
+        if (actionLabel != null && onAction != null) {
+
+            Spacer(Modifier.width(10.dp))
+
+            Box(
+                modifier = Modifier
+                    .width(1.dp)
+                    .height(14.dp)
+                    .background(Color.White.copy(alpha = 0.22f))
+            )
+
+            Spacer(Modifier.width(10.dp))
+
+            Text(
+                text = actionLabel,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = AccentGold,
+                modifier = Modifier.clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onAction
+                )
+            )
+        }
+    }
+}
+
+/**
+ * The only thing a visitor ever waits for now.
+ *
+ * Nothing is being recognised and nothing is being localised — the whole
+ * wait is ARCore building enough of a picture of the floor to put a
+ * structure on. So this coaches the one action that actually helps (move,
+ * slowly, looking down) instead of counting down a budget the visitor can't
+ * influence.
+ */
+@Composable
+private fun FindingGroundCard() {
 
     Column(
         modifier = Modifier
@@ -2766,108 +3423,31 @@ private fun SearchingCard(uiState: ArUiState) {
 
         Row(verticalAlignment = Alignment.CenterVertically) {
 
-            Icon(
-                imageVector = if (uiState.useImage) {
-                    Icons.Default.CenterFocusStrong
-                } else {
-                    Icons.Default.LocationOn
-                },
-                contentDescription = null,
-                tint = Primary,
-                modifier = Modifier.size(17.dp)
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = Primary
             )
 
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(10.dp))
 
             Text(
-                text = when {
-                    uiState.stage == ArStage.ANCHORING -> "Placing the structure\u2026"
-                    uiState.useImage -> "Looking for the structure"
-                    else -> "Finding your exact location"
-                },
-                color = TextPrimary,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold
+                text = "Looking for the ground",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
             )
         }
 
         Spacer(Modifier.height(6.dp))
 
         Text(
-            text = when {
-                uiState.useImage && uiState.useGeospatial ->
-                    "Face the structure so it fills most of the screen, or pan " +
-                        "slowly across the buildings around you. Either will " +
-                        "place it \u2014 the photo match is the more precise."
-                uiState.useImage ->
-                    "Stand facing it and move back until it fills most of the " +
-                        "screen. Move the phone a little side to side while " +
-                        "holding it on the structure \u2014 that lets the camera " +
-                        "judge its size."
-                else ->
-                    "Point the camera at the buildings and walls around you " +
-                        "\u2014 not the ground or sky \u2014 and pan slowly. " +
-                        "Your location is matched against the surroundings."
-            },
+            text = "Point the camera at the ground a few steps ahead and move " +
+                "the phone slowly from side to side. A grid appears as soon as " +
+                "there's a surface to place the structure on.",
+            fontSize = 12.5.sp,
             color = TextSecondary,
-            fontSize = 12.sp,
-            lineHeight = 16.sp
-        )
-
-        // A later, secondary hint rather than something shown from the first
-        // frame — most searches never need it, and leading with "don't worry
-        // about interference" before any interference has happened reads as
-        // an odd thing to bring up unprompted.
-        if (uiState.useImage && uiState.searchingSeconds >= SEARCH_HINT_DELAY_SECONDS) {
-
-            Spacer(Modifier.height(6.dp))
-
-            Text(
-                text = "If people or passing shadows keep crossing in front of " +
-                    "it, that's fine — just hold the camera steady and it " +
-                    "will keep trying.",
-                color = TextSecondary,
-                fontSize = 11.5.sp,
-                lineHeight = 15.sp
-            )
-        }
-
-        if (uiState.useGeospatial) {
-
-            Spacer(Modifier.height(8.dp))
-
-            val accuracy = geo.horizontalAccuracyMeters
-            val heading = geo.headingAccuracyDegrees
-
-            Text(
-                text = when {
-                    !geo.tracking || accuracy == null || heading == null ->
-                        "Location: localizing\u2026"
-                    geo.goodEnough ->
-                        String.format("Location locked (\u00B1%.1f m)", accuracy)
-                    else ->
-                        String.format(
-                            "Location \u00B1%.1f m, heading \u00B1%.0f\u00B0 \u2014 keep panning",
-                            accuracy,
-                            heading
-                        )
-                },
-                color = if (geo.goodEnough) Primary else TextSecondary,
-                fontSize = 11.5.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        LinearProgressIndicator(
-            progress = { uiState.searchProgress },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(5.dp)
-                .clip(RoundedCornerShape(50)),
-            color = Primary,
-            trackColor = Color(0xFFEDEDF0)
+            lineHeight = 17.sp
         )
     }
 }
@@ -2875,7 +3455,6 @@ private fun SearchingCard(uiState: ArUiState) {
 @Composable
 private fun ManualAlignCard(
     hasPlaced: Boolean,
-    onLock: () -> Unit,
     onReset: () -> Unit,
     onNudgeHeight: (Float) -> Unit
 ) {
@@ -2931,58 +3510,64 @@ private fun ManualAlignCard(
 
             Spacer(Modifier.height(12.dp))
 
+            // Two rows, not one.
+            //
+            // These four controls used to share a single Row with fixed
+            // widths and no weights: two 40dp buttons, a spacer, "Reset",
+            // and "Lock in Place", which comes to roughly 290dp of content
+            // before the card's own 16dp padding and the overlay's 20dp
+            // margin are added. On a 360dp-wide phone \u2014 which is the most
+            // common Android width there is \u2014 that does not fit, and a Row
+            // that does not fit does not wrap: it runs off the edge and the
+            // primary action is the thing that gets clipped.
+            //
+            // Height gets its own labelled row, and the two actions below
+            // share the width by weight, so they fit at any screen size and
+            // land on far bigger tap targets than they had.
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
 
+                Text(
+                    text = "Height",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+
                 NudgeButton(label = "\u2193", onClick = { onNudgeHeight(-MANUAL_HEIGHT_STEP) })
 
                 NudgeButton(label = "\u2191", onClick = { onNudgeHeight(MANUAL_HEIGHT_STEP) })
+            }
 
-                Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.height(10.dp))
 
-                // Outline style \u2014 a visibly lighter weight than Lock, since
-                // this discards the current placement rather than confirming
-                // it, and shouldn't read as the default/primary action.
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .border(1.dp, TextSecondary.copy(alpha = 0.4f), RoundedCornerShape(50))
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = onReset
-                        )
-                        .padding(horizontal = 14.dp, vertical = 9.dp)
-                ) {
-                    Text(
-                        text = "Reset",
-                        color = TextSecondary,
-                        fontSize = 12.5.sp,
-                        fontWeight = FontWeight.SemiBold
+            // Reset alone now. Lock in Place moved out to the floating
+            // control above the shutter — it is the action this whole card
+            // builds towards and the one a thumb reaches for most, and it
+            // was sitting at the top of the screen.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(50))
+                    .border(1.dp, TextSecondary.copy(alpha = 0.4f), RoundedCornerShape(50))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onReset
                     )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(Primary)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = onLock
-                        )
-                        .padding(horizontal = 18.dp, vertical = 9.dp)
-                ) {
-                    Text(
-                        text = "Lock in Place",
-                        color = Color.White,
-                        fontSize = 12.5.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+                    .padding(vertical = 11.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Reset placement",
+                    color = TextSecondary,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
         }
     }
@@ -2992,8 +3577,12 @@ private fun ManualAlignCard(
 private fun NudgeButton(label: String, onClick: () -> Unit) {
 
     Box(
+        // 48dp, not 40 — the platform's minimum touch target. These drive a
+        // precise adjustment (height, scale, rotation) one tap at a time, so
+        // a tap that lands on the wrong side of a too-small circle nudges
+        // the model the wrong way rather than just missing a press.
         modifier = Modifier
-            .size(40.dp)
+            .size(48.dp)
             .clip(CircleShape)
             .background(SurfaceSoft)
             .clickable(
@@ -3176,13 +3765,19 @@ private fun ArSiteInfoSheet(
         containerColor = Color.Transparent,
         scrimColor = Color.Black.copy(alpha = 0.18f),
         tonalElevation = 0.dp,
-        dragHandle = null
+        dragHandle = null,
+        // The sheet's default insets lift its content above the navigation
+        // bar, and with a transparent container that left a strip of bare
+        // camera under the glass. The glass now runs to the bottom edge and
+        // the inset is applied inside it instead (navigationBarsPadding
+        // below), so text still clears the gesture bar.
+        contentWindowInsets = { WindowInsets(0, 0, 0, 0) }
     ) {
 
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 620.dp)
+                .heightIn(max = 620.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())
                 .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
                 .background(CardSurface.copy(alpha = 0.72f))
                 .border(
@@ -3191,6 +3786,7 @@ private fun ArSiteInfoSheet(
                     shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
                 )
                 .verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
                 .padding(horizontal = 22.dp)
                 .padding(top = 14.dp, bottom = 28.dp)
         ) {
@@ -3236,8 +3832,11 @@ private fun ArSiteInfoSheet(
                 Spacer(Modifier.width(12.dp))
 
                 Box(
+                    // 48dp, the platform's minimum touch target — the 30dp
+                    // circle this replaces left a third of a typical
+                    // fingertip's contact area missing the button entirely.
                     modifier = Modifier
-                        .size(30.dp)
+                        .size(48.dp)
                         .clip(CircleShape)
                         .background(TextPrimary.copy(alpha = 0.08f))
                         .clickable(
@@ -3251,7 +3850,7 @@ private fun ArSiteInfoSheet(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Close",
                         tint = TextSecondary,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
@@ -3295,9 +3894,7 @@ private fun ArSiteInfoSheet(
                 fallbackOverview = site.description,
                 voiceover = voiceover,
                 onSourceClick = { url ->
-                    if (url.isNotBlank()) {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                    }
+                    com.histoury.app.util.LinkOpener.openWebLink(context, url)
                 }
             )
         }
@@ -3305,30 +3902,51 @@ private fun ArSiteInfoSheet(
 }
 
 /**
- * Info shortcut, styled to match [BackButton] exactly and placed in the
- * opposite top corner so the two read as a deliberate pair rather than one
- * control sitting wherever there happened to be room.
+ * The round glass control used in the AR camera's corners.
+ *
+ * Replaces the pair of flat black discs that used to sit there. Same
+ * treatment as [GlassPill] — a lightly translucent fill with a hairline
+ * highlight along the rim — so every control floating over the camera feed
+ * belongs to one set rather than each being its own shade of dark.
+ *
+ * The label is a content description rather than visible text. A camera
+ * screen with its functions written out in words reads as a settings page,
+ * and these two icons are conventional enough not to need it; a long press
+ * surfaces the label for anyone who does.
  */
 @Composable
-private fun InfoButton(onClick: () -> Unit) {
+private fun GlassIconButton(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
 
     Box(
+        // 14dp of inner padding around a 20dp icon lands the tappable circle
+        // at 48dp — the platform's minimum touch target. At the old 9dp the
+        // circle was only 38dp, on a screen held up one-handed while framing
+        // a shot, which is exactly where a corner control needs its full
+        // target, not less than it.
         modifier = Modifier
             .statusBarsPadding()
+            .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
             .padding(16.dp)
             .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.45f))
+            .background(Color.Black.copy(alpha = 0.32f))
+            .border(0.8.dp, Color.White.copy(alpha = 0.22f), CircleShape)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
+                onClickLabel = label,
                 onClick = onClick
             )
-            .padding(10.dp)
+            .padding(14.dp)
     ) {
         Icon(
-            imageVector = Icons.Default.Info,
-            contentDescription = "Site information",
-            tint = Color.White
+            imageVector = icon,
+            contentDescription = label,
+            tint = Color.White,
+            modifier = Modifier.size(20.dp)
         )
     }
 }
@@ -3394,6 +4012,7 @@ private fun CaptureButton(
 private fun CaptureReviewSheet(
     original: Bitmap,
     isSaving: Boolean,
+    suggestedFilter: CaptureFilter?,
     onDiscard: () -> Unit,
     onSave: (Bitmap) -> Unit
 ) {
@@ -3434,6 +4053,8 @@ private fun CaptureReviewSheet(
         )
 
         Box(
+            // 14dp of inner padding around a 20dp icon: 48dp tappable
+            // circle, the platform minimum, in place of the 40dp this had.
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .statusBarsPadding()
@@ -3446,7 +4067,7 @@ private fun CaptureReviewSheet(
                     enabled = !busy,
                     onClick = onDiscard
                 )
-                .padding(10.dp)
+                .padding(14.dp)
         ) {
             Icon(
                 imageVector = Icons.Default.Close,
@@ -3464,13 +4085,20 @@ private fun CaptureReviewSheet(
                 .padding(16.dp)
         ) {
 
+            // Scrollable, because there are now seven looks and a fixed row
+            // of seven would either squeeze each thumbnail past the point of
+            // being a useful preview or quietly clip the last of them off a
+            // narrow screen.
             Row(
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
             ) {
                 CaptureFilter.entries.forEach { filter ->
                     FilterOption(
                         filter = filter,
+                        isSuggested = filter == suggestedFilter,
                         thumbSource = thumbSource,
                         isSelected = filter == selected,
                         enabled = !busy,
@@ -3528,6 +4156,7 @@ private fun CaptureReviewSheet(
 @Composable
 private fun FilterOption(
     filter: CaptureFilter,
+    isSuggested: Boolean,
     thumbSource: Bitmap,
     isSelected: Boolean,
     enabled: Boolean,
@@ -3570,125 +4199,180 @@ private fun FilterOption(
             fontSize = 10.5.sp,
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
         )
-    }
-}
 
-@Composable
-private fun BackButton(onClick: () -> Unit) {
-
-    Box(
-        modifier = Modifier
-            // The camera feed is deliberately full-bleed; the control is not.
-            // Before this, on a phone with a centred cutout the back button
-            // sat directly under it and was unreachable.
-            .statusBarsPadding()
-            .padding(16.dp)
-            .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.45f))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
+        // Marked, not chosen. The site's own name says what kind of
+        // structure this is and some looks genuinely suit some buildings
+        // better, but which photograph somebody wants is not something the
+        // app gets to decide — so this points, and Original stays selected
+        // until a finger says otherwise.
+        if (isSuggested) {
+            Text(
+                text = "Suggested",
+                color = Primary,
+                fontSize = 8.5.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.4.sp
             )
-            .padding(10.dp)
-    ) {
-        Icon(
-            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-            contentDescription = "Back",
-            tint = Color.White
-        )
+        }
     }
 }
+
 
 // ----------------------------------------------------------------- helpers
 
-// ----- image recognition tuning -----
-
-/** Width readings within this fraction of each other count as agreeing. */
-private const val SIZE_AGREEMENT = 0.015f
+// ----- geofence gating -----
 
 /**
- * Agreeing frames before a photo's size counts as settled (~0.6 s at 30 fps).
- * Four used to be enough to lock — too few: ARCore is still refining its
- * estimate at that point, and the early number was what the model got
- * stuck with.
- */
-private const val STABLE_READINGS_REQUIRED = 18
-
-/** Lock anyway after this many fully tracked frames (~3 s), so a wobbly estimate can't block placement forever. */
-private const val SIZE_SETTLE_FALLBACK_FRAMES = 90
-
-/** A later estimate this far from the lock, for [SIZE_RELOCK_FRAMES], replaces it. */
-private const val SIZE_RELOCK_DIFFERENCE = 0.07f
-
-private const val SIZE_RELOCK_FRAMES = 30
-
-/**
- * Consecutive frames with NO tracking reading at all — not even
- * LAST_KNOWN_POSE — before the overlay says the structure was lost
- * (~1.5 s at 30 fps).
+ * How often the boundary watch asks for a fresh fix while AR is open.
  *
- * Below this, a placed structure counts as still tracked even without a
- * single FULL_TRACKING frame. Once anchored, the model's position no longer
- * depends on the image at all, so LAST_KNOWN_POSE — ARCore extrapolating
- * from an image it can't currently see — is a perfectly good signal that
- * everything is fine; forcing FULL_TRACKING here just re-litigates a
- * question that was already answered when the anchor was made. A grace
- * period on top of that is what stops a person walking past the structure,
- * a passing shadow, or a moment of glare from flashing "lost sight of the
- * structure" on and off the screen for something that resolves itself a
- * second later.
+ * Deliberately slow. This is a courtesy check, not a security perimeter —
+ * the real gate already ran before the camera started — and a tight polling
+ * loop on PRIORITY_HIGH_ACCURACY would cost battery all session for no gain.
  */
-private const val TRACKING_LOST_GRACE_FRAMES = 45
+private const val GEOFENCE_WATCH_INTERVAL_MS = 10_000L
 
 /**
- * Seconds of searching before [SearchingCard] adds the "obstructions are
- * fine" hint. Held back this long so the coaching only appears once it's
- * plausibly relevant, rather than pre-emptively on every search.
+ * Consecutive outside-the-fence fixes before the visitor is treated as
+ * having actually left (so roughly half a minute at the interval above).
+ *
+ * A single stray fix means nothing: consumer GPS beside a stone wall
+ * routinely wanders tens of metres, which is exactly the situation this app
+ * is used in. Failed or missing fixes never count towards this at all. The
+ * cost of calling it wrong is taking a structure away from somebody standing
+ * in front of it, so the bar is set high and the consequence is mild —
+ * placement is blocked, nothing already placed is disturbed.
  */
-private const val SEARCH_HINT_DELAY_SECONDS = 6
-
-// ----- geospatial tuning -----
+private const val GEOFENCE_EXIT_CONFIRMATIONS = 3
 
 /**
- * Accuracy required before placing by location. Tighter numbers place more
- * precisely but may never be reached in Intramuros' narrow streets; these
- * are the loosest values that still put a structure on the right spot.
+ * How many fixes the entry gate may spend before refusing.
+ *
+ * The loop stops at the first reading that puts the visitor inside, so this
+ * is a ceiling on the bad case rather than a cost every visitor pays.
  */
-private const val GEO_MAX_HORIZONTAL_ERROR_METERS = 3.0
+private const val GEOFENCE_GATE_ATTEMPTS = 3
 
-private const val GEO_MAX_HEADING_ERROR_DEGREES = 8.0
+// ----- photo mode -----
 
 /**
- * Looser fix accepted after [GEO_FALLBACK_AFTER_MS] of Earth tracking.
- * Heading is kept fairly tight even here: because the pose is pinned once
- * placed, a heading error at placement becomes a permanent sideways offset
- * (roughly distance × error in radians).
+ * How long the chrome stays up after the structure is locked, or after a tap
+ * brings it back.
+ *
+ * Long enough to read the pill and reach the unlock, short enough that
+ * somebody lining up a photograph is not waiting on it.
  */
-private const val GEO_USABLE_HORIZONTAL_ERROR_METERS = 5.0
+private const val PHOTO_MODE_CHROME_IDLE_MS = 3_500L
 
-private const val GEO_USABLE_HEADING_ERROR_DEGREES = 12.0
+/**
+ * How long a lock or unlock notice stays up.
+ *
+ * Two lines at this size take a beat over two seconds to read without
+ * hurrying, and this one has to be read by somebody whose attention is on a
+ * building rather than on a phone. Past about three seconds it stops being a
+ * confirmation and starts being something in the way.
+ */
+private const val AR_NOTICE_MS = 2_800L
 
-private const val GEO_FALLBACK_AFTER_MS = 10_000L
+/** No zoom. Also the floor: this crops the render, it cannot widen it. */
+private const val MIN_CAMERA_ZOOM = 1f
 
-/** Consecutive good frames required (~0.5 s). */
-private const val GEO_GOOD_FRAMES_REQUIRED = 15
+/**
+ * The ceiling, chosen for how the result looks rather than for a round
+ * number.
+ *
+ * This is a crop of an already-rendered frame, so every step costs real
+ * detail in both the camera feed and the reconstruction. Past roughly three
+ * times the image is visibly soft, and offering more would be offering a
+ * worse photograph with a bigger number attached.
+ */
+private const val MAX_CAMERA_ZOOM = 3f
 
-private const val GEO_STATUS_INTERVAL_MS = 500L
+/** Spacing between those attempts, so each one is a genuinely new reading. */
+private const val GEOFENCE_GATE_RETRY_MS = 2_500L
 
-/** Wait before asking again when a terrain anchor request fails. */
-private const val TERRAIN_RETRY_INTERVAL_MS = 3_000L
+/**
+ * How old a cached `lastLocation` may be and still be allowed to decide
+ * whether somebody is standing at a historical site.
+ *
+ * The gate prefers a fresh fix and only reaches for the cache when the
+ * engine produced nothing at all. That fallback used to accept whatever was
+ * there — a reading from hours ago and possibly a different city, handed
+ * full authority to lock the visitor out. Two minutes is about as stale as a
+ * position can be while still describing where somebody is standing now.
+ */
+private const val GEOFENCE_CACHED_FIX_MAX_AGE_MS = 2 * 60 * 1_000L
+
+/**
+ * A fresh fix from the location engine, or null if it could not produce one.
+ *
+ * Deliberately not `lastLocation`: that returns whatever the device last
+ * happened to record, which may be hours old and far away if nothing has
+ * asked for a position since. `getCurrentLocation` asks for where the phone
+ * is now.
+ */
+private suspend fun freshFix(client: FusedLocationProviderClient): Location? =
+    try {
+        client.getCurrentLocation(
+            Priority.PRIORITY_HIGH_ACCURACY,
+            CancellationTokenSource().token
+        ).await()
+    } catch (e: Exception) {
+        null
+    }
+
+/**
+ * The cached fix, but only if it is recent enough to still describe where
+ * the phone is — see [GEOFENCE_CACHED_FIX_MAX_AGE_MS].
+ *
+ * Age is measured with `elapsedRealtimeNanos` against the monotonic clock
+ * rather than with `time` against the wall clock, because the wall clock can
+ * be wrong, adjusted, or in another time zone, and a fix that merely looks
+ * recent is exactly what this is here to reject.
+ */
+private suspend fun recentLastLocation(client: FusedLocationProviderClient): Location? {
+
+    val cached = try {
+        client.lastLocation.await()
+    } catch (e: Exception) {
+        null
+    } ?: return null
+
+    val ageMs = (SystemClock.elapsedRealtimeNanos() - cached.elapsedRealtimeNanos) / 1_000_000L
+
+    return cached.takeIf { ageMs in 0..GEOFENCE_CACHED_FIX_MAX_AGE_MS }
+}
+
+// ----- manual placement tuning -----
 
 /** How far the structure slides per pixel of drag during manual alignment. */
 private const val MANUAL_DRAG_METERS_PER_PIXEL = 0.02f
 
 private const val MANUAL_HEIGHT_STEP = 0.25f
 
-/** Pinch-to-resize limits for "Place It Myself" — never smaller than 40% or
- *  larger than 250% of the model's normal (admin/authored) size, so a fast
- *  or clumsy pinch can't accidentally leave it comically tiny or huge. */
-private const val MANUAL_SCALE_MIN = 0.4f
-private const val MANUAL_SCALE_MAX = 2.5f
+/**
+ * The size a model is normalised to when the admin panel has no explicit
+ * Model Size for the site — its longest side, in metres.
+ *
+ * Photogrammetry GLBs arrive in wildly different authored units; one scan's
+ * "30" might be centimetres and another's metres. Normalising to a known,
+ * human-scale starting point means every site opens at a sane size and the
+ * visitor pinches from there, rather than being handed a structure that is
+ * either microscopic or several storeys tall on the first frame.
+ */
+private const val DEFAULT_MANUAL_MODEL_SIZE_METERS = 2.5f
+
+/**
+ * Pinch-to-resize limits, as a multiple of the model's base size.
+ *
+ * Wider than they used to be, because manual placement is now the only way
+ * a structure gets placed and it has to cover every way people want to look
+ * at one: a tabletop model to walk around, something room-sized, or the
+ * full-height reconstruction to stand inside. The old 0.4–2.5 range was
+ * sized for nudging an already-correct automatic placement, which no longer
+ * exists.
+ */
+private const val MANUAL_SCALE_MIN = 0.1f
+private const val MANUAL_SCALE_MAX = 10f
 
 /** Per-tap step for the explicit +/- resize buttons (ManualScaleRotateBar),
  *  as a multiplicative factor — 15% bigger/smaller per tap, comparable to a
@@ -3720,51 +4404,23 @@ private const val MANUAL_GRID_STEP_METERS = 0.4f
  * distances from the centre of the structure.
  */
 /**
- * Live placement readout, for the case where the structure is recognised
- * but no model is visible on screen.
+ * What the placement panel shows.
  *
- * That symptom has several causes that look identical through the camera —
- * the model occluded by the real wall, placed inside the visitor, scaled to
- * a speck, or scaled so large they are standing inside it. None of them can
- * be told apart by looking, and all of them are settled instantly by four
- * numbers. This is the cheapest way to get those numbers while standing in
- * front of the actual structure, which is the only place the problem
- * reproduces.
+ * Small on purpose. The panel it feeds used to be a live debug readout
+ * rebuilt on every tracked frame; each of these three values changes a
+ * handful of times in a whole session, so the summary is assembled from
+ * ordinary screen state at composition instead of being pushed from the
+ * render loop.
  */
-private data class ArPlacementDebug(
-    val modelLoaded: Boolean,
-    val modelBytes: Long,
+private data class ArPlacementSummary(
+    /** Whether the structure has been pinned to the ground yet. */
     val anchorAttached: Boolean,
-    val nodeInScene: Boolean,
-    /** Camera to anchor, in metres. The single most diagnostic number here. */
-    val distanceMeters: Float,
-    /** The uniform factor actually applied to the model. */
-    val appliedScale: Double,
-    /** The locked structure height (photo height × structure fraction) the scale was derived from. */
-    val structureHeightMeters: Double,
-    /** The model's own height, measured from its bounding box. */
-    val modelHeightUnits: Double,
-    /** Whether the size estimate has settled and the scale is fixed. */
-    val scaleLocked: Boolean,
-    /** What ARCore measured the structure as, once recognised. */
-    val extentX: Float,
-    val extentZ: Float,
-    val offsetRight: Double,
-    val offsetUp: Double,
-    val offsetForward: Double,
-    val occlusionOn: Boolean,
-    val studioLighting: Boolean,
-    val materialCount: Int,
-    val animationCount: Int,
-    val trackingMethod: String,
-    /** What placed the model: which photo, geospatial, or by hand. */
-    val placedBy: String,
-    /** How many reference photos ARCore accepted. */
-    val photos: String,
-    /** Geospatial accuracy, or "off". */
-    val geospatial: String,
-    /** The admin panel's Model Size; 0 when not set. */
-    val explicitModelSize: Double
+    /** The reconstruction's real-world height, in metres; 0 while measuring. */
+    val modelHeightMeters: Float,
+    /** Whether this device can do depth occlusion at all. */
+    val occlusionSupported: Boolean,
+    /** Whether it is currently switched on. */
+    val occlusionOn: Boolean
 )
 
 /**
@@ -3805,153 +4461,75 @@ private data class ArPlacementDebug(
  */
 private object ArLightingPreference {
     var useNeutralLighting by mutableStateOf(true)
+
+    /**
+     * Multiplier applied to the reconstruction's base colour — see
+     * MODEL_BRIGHTNESS_STEPS below. Held here for the same reason as the
+     * lighting mode, so a visitor's choice survives leaving and reopening
+     * AR, even though unlike the lighting mode this one applies at once.
+     */
+    var brightnessBoost by mutableStateOf(DEFAULT_MODEL_BRIGHTNESS)
 }
 
 private const val MATTE_METALLIC = 0.0f
 private const val MATTE_ROUGHNESS = 0.92f
 
+/**
+ * The neutral studio IBL that a plain SceneView uses by default and an
+ * ARSceneView does not — see the environment block in the screen above.
+ *
+ * Packaged inside the SceneView AAR rather than this app, so it needs no
+ * entry under `app/src/main/assets`. Should a future SceneView move or drop
+ * it, the loader throws, the fallback logs, and AR renders as it did before
+ * this was added rather than failing to open.
+ */
+private const val NEUTRAL_IBL_ASSET = "environments/neutral/neutral_ibl.ktx"
+
+/**
+ * Brightness lift for the reconstruction itself, independent of how the
+ * scene around it is lit.
+ *
+ * Neutral lighting keeps a model legible in a dim room, but it is a fixed,
+ * moderate environment — it does not brighten to match where the phone
+ * actually is. Outdoors the camera feed is very bright while the model is
+ * still lit by that same fixed environment, so the reconstruction reads as
+ * dark against its own surroundings even though nothing about it is
+ * technically wrong. Photogrammetry compounds this: a scan captured under
+ * overcast light or in shade carries that dimness in its base colour
+ * texture, and the matte surface response above — deliberately, correctly —
+ * removes the specular highlights that would otherwise lift it.
+ *
+ * So this multiplies `baseColorFactor`, the texture's own multiplier,
+ * rather than touching any light. That brightens the reconstruction
+ * wherever it is viewed, applies the instant it changes rather than at the
+ * next session, and cannot affect anchor, position, rotation, or scale: it
+ * is a per-material shader constant and nothing more.
+ *
+ * Written as an absolute value because a Filament material is write-only
+ * from here — there is no read-back to multiply against. A scan's authored
+ * factor is effectively always (1,1,1,1), so writing (b,b,b,1) is a plain
+ * boost, and the 1.0 step writes back exactly that default, which is why
+ * cycling round to it restores the original look rather than approximating
+ * it. Alpha is held at 1.0 rather than scaled, so brightening can never
+ * turn the structure translucent.
+ */
+private const val DEFAULT_MODEL_BRIGHTNESS = 1.0f
+
+/**
+ * The steps the brightness control cycles through.
+ *
+ * 1.0 is both the default and the true one: it writes back a material's own
+ * authored baseColorFactor, so starting here means AR shows the scan exactly
+ * as the admin preview does, and any lift from there is the visitor's
+ * deliberate choice rather than something the app decided for them.
+ *
+ * Lower steps sit below 1.0 as well, because with the neutral IBL now in
+ * place a bright noon facade can want taking down rather than lifting.
+ */
+private val MODEL_BRIGHTNESS_STEPS = listOf(1.0f, 1.25f, 1.5f, 1.8f, 0.85f)
+
 /** What a placement's size is measured from. Null = no photo to measure (geospatial/manual). */
 private data class ScaleBasis(val structureHeightMeters: Float?)
-
-/**
- * The pose the model should occupy, given where ARCore says a reference
- * photo is and that photo's own placement from the admin panel.
- *
- * ARCore reports an augmented image with +X running left to right across
- * the photo, +Z running down it, and +Y pointing out of it toward the
- * viewer.
- *
- * The pose is LEVELLED. The model keeps only the photo's facing direction
- * (its +Y, flattened onto the ground) and stands with its up axis on true
- * vertical. Previously the whole image pose was used, so a photo estimated a
- * couple of degrees off vertical tipped the entire structure by the same
- * amount — invisible on a gate, but metres of lean at the top of a tower,
- * and the main reason models looked sunk into or floating off the ground.
- *
- * In the levelled frame +X is the visitor's right, +Y is up and +Z points
- * toward the visitor — exactly the admin panel's "right", "up" and
- * "forward" — so the offsets apply directly, followed by the photo-relative
- * yaw.
- */
-private fun imageAnchorPose(image: AugmentedImage, reference: ArReferenceImage): Pose {
-
-    val center = image.centerPose
-    val normal = center.yAxis // out of the photo, toward the viewer
-
-    val flatLength = sqrt(normal[0] * normal[0] + normal[2] * normal[2])
-
-    // A photo lying almost flat (a floor plaque) has no meaningful facing
-    // direction; fall back to the image's own frame, stood upright.
-    if (flatLength < 0.2f) {
-        return legacyImageAnchorPose(image, reference)
-    }
-
-    val facing = atan2(normal[0] / flatLength, normal[2] / flatLength)
-    val level = Pose(
-        center.translation,
-        floatArrayOf(0f, sin(facing / 2f), 0f, cos(facing / 2f))
-    )
-
-    val offset = Pose.makeTranslation(
-        reference.offsetRightMeters.toFloat(),
-        reference.offsetUpMeters.toFloat(),
-        reference.offsetForwardMeters.toFloat()
-    )
-
-    return level.compose(offset).compose(yawPose(reference.headingDegrees))
-}
-
-/** The old, unlevelled construction — only for near-horizontal photos. */
-private fun legacyImageAnchorPose(image: AugmentedImage, reference: ArReferenceImage): Pose {
-
-    // +Z runs down the image, so "up" is negative Z.
-    val translation = Pose.makeTranslation(
-        reference.offsetRightMeters.toFloat(),
-        reference.offsetForwardMeters.toFloat(),
-        -reference.offsetUpMeters.toFloat()
-    )
-
-    // -90 degrees about X: takes the model's +Y (up) onto the image frame's
-    // -Z (up the photo).
-    val upright = Pose.makeRotation(-SQRT_HALF, 0f, 0f, SQRT_HALF)
-
-    return image.centerPose
-        .compose(translation)
-        .compose(upright)
-        .compose(yawPose(reference.headingDegrees))
-}
-
-private fun yawPose(degrees: Double): Pose {
-    val half = Math.toRadians(degrees).toFloat() / 2f
-    return Pose.makeRotation(0f, sin(half), 0f, cos(half))
-}
-
-/**
- * Resolves the site's geospatial placement as a terrain anchor.
- *
- * Terrain anchors take their altitude from Google's terrain model at the
- * pin, so the admin only sets a height OFFSET above the ground rather than
- * an absolute altitude nobody knows.
- *
- * The rotation is about the vertical axis in ARCore's East-Up-South frame:
- * (180 - heading) turns the model's front (+Z) to face the compass bearing
- * set in the admin panel, 0 = north.
- */
-private fun resolveTerrainAnchor(
-    earth: Earth,
-    site: HistoricalSite,
-    onResult: (Anchor?) -> Unit
-) {
-    val latitude = site.arLatitude
-    val longitude = site.arLongitude
-
-    if (latitude == null || longitude == null) {
-        onResult(null)
-        return
-    }
-
-    val half = Math.toRadians(180.0 - site.arGeoHeadingDegrees) / 2.0
-
-    try {
-        earth.resolveAnchorOnTerrainAsync(
-            latitude,
-            longitude,
-            site.arAltitudeOffsetMeters,
-            0f,
-            kotlin.math.sin(half).toFloat(),
-            0f,
-            kotlin.math.cos(half).toFloat()
-        ) { anchor, state ->
-            if (state == Anchor.TerrainAnchorState.SUCCESS && anchor != null) {
-                onResult(anchor)
-            } else {
-                Log.w("HistouryAR", "Terrain anchor failed: $state")
-                anchor?.detach()
-                onResult(null)
-            }
-        }
-    } catch (error: Exception) {
-        Log.e("HistouryAR", "Terrain anchor request failed", error)
-        onResult(null)
-    }
-}
-
-/**
- * A visitor-readable reason Earth can't run, or null when it's fine.
- * Compared by name so a constant missing from an older ARCore can't break
- * the build.
- */
-private fun describeEarthProblem(state: Earth.EarthState): String? = when (state.name) {
-    "ENABLED" -> null
-    "ERROR_NOT_AUTHORIZED" ->
-        "Location-based AR isn't authorised for this app. The ARCore API key " +
-            "needs the Geospatial API enabled in Google Cloud."
-    "ERROR_RESOURCE_EXHAUSTED" ->
-        "Location-based AR is busy right now. Try again in a few minutes."
-    "ERROR_APK_VERSION_TOO_OLD" ->
-        "Update Google Play Services for AR to place this structure by location."
-    else -> "Location-based AR couldn't start on this phone."
-}
 
 /**
  * Projects a world-space point to screen pixels using the camera's current
@@ -4039,72 +4617,13 @@ private fun buildGroundGridScreenLines(
     return lines
 }
 
-private const val SQRT_HALF = 0.70710678f
 
-/**
- * Downloads the reference photograph and returns it in the ARGB_8888 form
- * ARCore's image database requires. Cached alongside the models, keyed by
- * URL, so replacing the photo in the admin panel produces a fresh entry.
- */
-private suspend fun downloadReferenceImage(
-    context: android.content.Context,
-    url: String
-): Bitmap? = withContext(Dispatchers.IO) {
-
-    val cacheDirectory = OfflineStore.referencesDir(context)
-    val cacheKey = OfflineStore.keyFor(url)
-    val cachedFile = File(cacheDirectory, "$cacheKey.img")
-
-    if (!cachedFile.isFile || cachedFile.length() <= 0L) {
-
-        val temporaryFile = File(cacheDirectory, "$cacheKey.download")
-        temporaryFile.delete()
-
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 30_000
-            readTimeout = 60_000
-            instanceFollowRedirects = true
-            requestMethod = "GET"
-        }
-
-        try {
-            connection.connect()
-            if (connection.responseCode !in 200..299) {
-                error("Reference image download returned HTTP ${connection.responseCode}.")
-            }
-
-            connection.inputStream.use { input ->
-                temporaryFile.outputStream().buffered().use { output ->
-                    input.copyTo(output)
-                }
-            }
-
-            if (cachedFile.exists()) cachedFile.delete()
-            if (!temporaryFile.renameTo(cachedFile)) {
-                temporaryFile.copyTo(cachedFile, overwrite = true)
-                temporaryFile.delete()
-            }
-        } finally {
-            connection.disconnect()
-            temporaryFile.delete()
-        }
-    }
-
-    val decoded = BitmapFactory.decodeFile(cachedFile.absolutePath) ?: return@withContext null
-
-    // ARCore's addImage requires ARGB_8888. Storage may well hand back a
-    // JPEG that decodes to RGB_565 on some devices.
-    if (decoded.config == Bitmap.Config.ARGB_8888) {
-        decoded
-    } else {
-        decoded.copy(Bitmap.Config.ARGB_8888, false)
-    }
-}
 
 @Composable
 private fun UnavailableState(
     reason: String,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onRetry: (() -> Unit)? = null
 ) {
 
     Column(
@@ -4134,6 +4653,29 @@ private fun UnavailableState(
 
         Spacer(Modifier.height(24.dp))
 
+        if (onRetry != null) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.White)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onRetry
+                    )
+                    .padding(horizontal = 22.dp, vertical = 11.dp)
+            ) {
+                Text(
+                    text = "Try again",
+                    color = Color.Black,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Spacer(Modifier.height(10.dp))
+        }
+
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(50))
@@ -4156,6 +4698,135 @@ private fun UnavailableState(
 }
 
 /**
+ * Shown when the visitor isn't standing inside this site's own geofence.
+ *
+ * Deliberately not an error. Nothing is broken and nothing failed — the
+ * experience is waiting where it belongs, and the visitor simply isn't there
+ * yet. So it reads as directions rather than an apology, and the primary
+ * action is the one that actually helps: show them where to go.
+ */
+@Composable
+private fun OutsideSiteState(
+    siteName: String,
+    reason: String,
+    onRetry: () -> Unit,
+    onViewOnMap: () -> Unit,
+    onClose: () -> Unit
+) {
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+
+        Icon(
+            imageVector = Icons.Default.LocationOn,
+            contentDescription = null,
+            tint = AccentGold,
+            modifier = Modifier.size(42.dp)
+        )
+
+        Spacer(Modifier.height(16.dp))
+
+        Text(
+            text = "You're outside this historical site",
+            color = Color.White,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(Modifier.height(10.dp))
+
+        Text(
+            text = reason.ifBlank {
+                "Travel Back in Time is only available when you are at " +
+                    siteName.ifBlank { "this location" }.plus(". ") +
+                    "Move closer to the historical site and try again."
+            },
+            color = Color.White.copy(alpha = 0.82f),
+            fontSize = 14.sp,
+            textAlign = TextAlign.Center,
+            lineHeight = 20.sp
+        )
+
+        Spacer(Modifier.height(26.dp))
+
+        // The primary action, and deliberately so.
+        //
+        // This screen used to offer only a way to leave it, which meant a
+        // visitor standing at the site whose phone had simply produced one
+        // poor fix had no way to say "look again" — the refusal was final
+        // until they backed out of AR entirely. Given that a wrong refusal
+        // is now the likeliest reason anybody is reading this screen at all,
+        // trying again belongs above the two exits rather than below them.
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(Primary)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onRetry
+                )
+                .padding(horizontal = 24.dp, vertical = 12.dp)
+        ) {
+            Text(
+                text = "Try Again",
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(Color.White.copy(alpha = 0.16f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onViewOnMap
+                )
+                .padding(horizontal = 24.dp, vertical = 12.dp)
+        ) {
+            Text(
+                text = "View on Map",
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(Color.White.copy(alpha = 0.16f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onClose
+                )
+                .padding(horizontal = 24.dp, vertical = 12.dp)
+        ) {
+            Text(
+                text = "Close",
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+/**
  * Grabs whatever is currently on screen, including the AR camera feed.
  *
  * A SurfaceView's contents don't exist in the Compose/View draw tree, so
@@ -4163,20 +4834,6 @@ private fun UnavailableState(
  * be. PixelCopy reads the actual composited window buffer instead, which is
  * both correct and independent of the AR library's own screenshot support.
  */
-/**
- * How wide the model is in its own units, from its bounding box.
- *
- * Read from the loaded asset rather than typed into the admin panel. The
- * number was never knowable from a desk — it depends on what the modeller
- * set as one unit in Blender — so asking an admin for it was asking them to
- * guess, and a wrong guess scaled the structure wrongly.
- *
- * Filament reports the box as a centre and a half-extent, so the full width
- * is twice the X half-extent.
- */
-private fun measureModelWidth(instance: ModelInstance): Float =
-    runCatching { instance.model.boundingBox.halfExtent[0] * 2f }.getOrDefault(0f)
-
 /**
  * How tall the model is in its own units, from its bounding box's vertical
  * axis.
@@ -4187,7 +4844,7 @@ private fun measureModelWidth(instance: ModelInstance): Float =
  * matched against the structure's real-world height for.
  */
 private fun measureModelHeight(instance: ModelInstance): Float =
-    runCatching { instance.model.boundingBox.halfExtent[1] * 2f }.getOrDefault(0f)
+    runCatching { measureStructureHalfExtent(instance)[1] * 2f }.getOrDefault(0f)
 
 /**
  * The model's longest side in its own units. The admin panel's Model Size is
@@ -4195,9 +4852,117 @@ private fun measureModelHeight(instance: ModelInstance): Float =
  */
 private fun measureModelLongestSide(instance: ModelInstance): Float =
     runCatching {
-        val half = instance.model.boundingBox.halfExtent
+        val half = measureStructureHalfExtent(instance)
         maxOf(half[0], half[1], half[2]) * 2f
     }.getOrDefault(0f)
+
+/**
+ * Nodes that are scenery or life rather than the structure itself. A painted
+ * sky strip 95 m tall, or a dove circling 70 m up, would otherwise count
+ * toward the model's height and longest side, and the structure would be
+ * scaled down to make room for them.
+ */
+private val NON_STRUCTURE_NODE_PREFIXES = listOf("Backdrop_", "Dove_", ArSpatialAudio.SFX_PREFIX)
+
+/**
+ * Half-extents of the model's bounding box, counting only the renderables
+ * that belong to the structure (see NON_STRUCTURE_NODE_PREFIXES), in the
+ * model's own units. Falls back to the whole asset's box for a model with
+ * nothing to exclude or nothing measurable.
+ */
+private fun measureStructureHalfExtent(instance: ModelInstance): FloatArray {
+    val asset = instance.model
+    val fallback = asset.boundingBox.halfExtent
+    val engine = asset.engine
+    val tm = engine.transformManager
+    val rm = engine.renderableManager
+
+    // Positions are taken relative to the model's own root so the result
+    // doesn't depend on where, or how large, the model has been placed.
+    val rootWorld = FloatArray(16)
+    val rootInverse = FloatArray(16)
+    tm.getWorldTransform(tm.getInstance(instance.root), rootWorld)
+    if (!android.opengl.Matrix.invertM(rootInverse, 0, rootWorld, 0)) return fallback
+
+    val world = FloatArray(16)
+    val local = FloatArray(16)
+    val corner = FloatArray(4)
+    val out = FloatArray(4)
+    val min = floatArrayOf(Float.MAX_VALUE, Float.MAX_VALUE, Float.MAX_VALUE)
+    val max = floatArrayOf(-Float.MAX_VALUE, -Float.MAX_VALUE, -Float.MAX_VALUE)
+    val box = com.google.android.filament.Box()
+    var excludedAny = false
+    var counted = 0
+
+    for (entity in instance.entities) {
+        if (!rm.hasComponent(entity)) continue
+        if (belongsToNonStructure(asset, tm, entity)) {
+            excludedAny = true
+            continue
+        }
+        rm.getAxisAlignedBoundingBox(rm.getInstance(entity), box)
+        tm.getWorldTransform(tm.getInstance(entity), world)
+        android.opengl.Matrix.multiplyMM(local, 0, rootInverse, 0, world, 0)
+        val c = box.center
+        val h = box.halfExtent
+        for (i in 0 until 8) {
+            corner[0] = c[0] + if (i and 1 == 0) -h[0] else h[0]
+            corner[1] = c[1] + if (i and 2 == 0) -h[1] else h[1]
+            corner[2] = c[2] + if (i and 4 == 0) -h[2] else h[2]
+            corner[3] = 1f
+            android.opengl.Matrix.multiplyMV(out, 0, local, 0, corner, 0)
+            for (a in 0..2) {
+                if (out[a] < min[a]) min[a] = out[a]
+                if (out[a] > max[a]) max[a] = out[a]
+            }
+        }
+        counted++
+    }
+
+    if (!excludedAny || counted == 0) return fallback
+    return floatArrayOf((max[0] - min[0]) / 2f, (max[1] - min[1]) / 2f, (max[2] - min[2]) / 2f)
+}
+
+/** Whether this entity, or any node above it, is named as scenery or life. */
+private fun belongsToNonStructure(
+    asset: com.google.android.filament.gltfio.FilamentAsset,
+    tm: com.google.android.filament.TransformManager,
+    entity: Int
+): Boolean {
+    var current = entity
+    repeat(16) {
+        val name = asset.getName(current)
+        if (name != null && NON_STRUCTURE_NODE_PREFIXES.any { name.startsWith(it) }) return true
+        val ti = tm.getInstance(current)
+        if (ti == 0) return false
+        val parent = tm.getParent(ti)
+        if (parent == 0) return false
+        current = parent
+    }
+    return false
+}
+
+/** Rotates [v] by [q] (v' = v + 2·q.xyz × (q.xyz × v + q.w·v)). */
+private fun rotateByQuaternion(q: Quaternion, v: Float3): Float3 {
+    val tx = q.y * v.z - q.z * v.y + q.w * v.x
+    val ty = q.z * v.x - q.x * v.z + q.w * v.y
+    val tz = q.x * v.y - q.y * v.x + q.w * v.z
+    return Float3(
+        v.x + 2f * (q.y * tz - q.z * ty),
+        v.y + 2f * (q.z * tx - q.x * tz),
+        v.z + 2f * (q.x * ty - q.y * tx)
+    )
+}
+
+/** Warm late-afternoon sunlight. */
+private val SUN_COLOR = Float4(1.0f, 0.88f, 0.72f, 1.0f)
+
+/**
+ * Direction the sunlight travels, in the model's own glTF space (+Y up,
+ * +X east, −Z north): from a sun about 28° up in the west-southwest, which
+ * is where the reconstruction's painted backdrop puts its golden glow.
+ */
+private val SUN_DIRECTION_MODEL_SPACE = Float3(0.83f, -0.47f, -0.30f)
 
 private fun findSurfaceView(root: View): SurfaceView? {
 
@@ -4308,6 +5073,16 @@ private fun captureFromWindow(
 /**
  * The looks offered on [CaptureReviewSheet], applied to the finished photo
  * rather than the live camera — see the doc comment there for why.
+ *
+ * Built around what these photographs actually contain: a reconstructed
+ * stone building standing in present-day Intramuros. That rules out most of
+ * what a social filter does. Heavy grading, crushed blacks and strong tints
+ * all work by throwing away detail, and the detail they throw away here is
+ * the masonry somebody walked across a walled city to look at. So every
+ * grade below is deliberately restrained, and each one is built from the
+ * same three cheap primitives — a colour matrix, a tiled grain, a radial
+ * wash — so a full-resolution photo costs a handful of draw calls rather
+ * than a per-pixel loop.
  */
 private enum class CaptureFilter(val label: String) {
 
@@ -4315,92 +5090,211 @@ private enum class CaptureFilter(val label: String) {
         override fun apply(bitmap: Bitmap): Bitmap = bitmap
     },
 
-    VINTAGE("Vintage") {
+    /**
+     * A wartime press photograph: colour mostly gone but not entirely,
+     * a flatter tonal range, smoke-coloured haze and visible film grain.
+     *
+     * Saturation is left at 0.2 rather than 0 on purpose. Period photographs
+     * of Manila are monochrome, but a fully desaturated AR capture reads as
+     * "black and white filter" instead of "old photograph", and the faint
+     * surviving colour is what keeps the rubble looking like rubble.
+     */
+    WAR("War · 1940s") {
+        override fun apply(bitmap: Bitmap): Bitmap {
+            var out = applyColorMatrix(bitmap, warMatrix())
+            out = applyHaze(out, strength = 0.10f, color = HAZE_SMOKE)
+            out = applyGrain(out, strength = 0.14f)
+            return applyVignette(out, strength = 0.22f)
+        }
+    },
+
+    /** Warm, faded and softly grained — a print that has sat in a drawer. */
+    OLD_PHOTOGRAPH("Old Photograph") {
+        override fun apply(bitmap: Bitmap): Bitmap {
+            val out = applyColorMatrix(bitmap, oldPhotographMatrix())
+            return applyVignette(applyGrain(out, strength = 0.08f), strength = 0.26f)
+        }
+    },
+
+    /**
+     * For churches, chapels and cathedrals: warm light, a gentle bloom
+     * around anything already bright, and a single soft shaft from above.
+     *
+     * The bloom is what does most of the work, and it is deliberately
+     * additive rather than a brightness lift — adding light only where light
+     * already is leaves the shaded stone exactly as dark as it was, which is
+     * the difference between a sunlit interior and a washed-out photograph.
+     */
+    SACRED("Holy · Sacred") {
+        override fun apply(bitmap: Bitmap): Bitmap {
+            var out = applyColorMatrix(bitmap, sacredMatrix())
+            out = applyBloom(out, strength = 0.30f)
+            return applyLightShaft(out, strength = 0.16f)
+        }
+    },
+
+    /** Late-afternoon sun: warm highlights, cool shadows left alone. */
+    GOLDEN_HOUR("Golden Hour") {
+        override fun apply(bitmap: Bitmap): Bitmap {
+            val out = applyColorMatrix(bitmap, goldenHourMatrix())
+            return applyBloom(out, strength = 0.16f)
+        }
+    },
+
+    /** Deeper shadows and more contrast, for forts, walls and ruins. */
+    DRAMATIC("Dramatic History") {
         override fun apply(bitmap: Bitmap): Bitmap =
-            applyVignette(applyColorMatrix(bitmap, vintageMatrix()), strength = 0.35f)
+            applyVignette(applyColorMatrix(bitmap, dramaticMatrix()), strength = 0.34f)
     },
 
-    SEPIA("Sepia") {
-        override fun apply(bitmap: Bitmap): Bitmap = applyColorMatrix(bitmap, sepiaMatrix())
-    },
-
-    NOIR("Noir") {
-        override fun apply(bitmap: Bitmap): Bitmap = applyColorMatrix(bitmap, noirMatrix())
+    /**
+     * Neutral and faithful, for anybody who wants the architecture recorded
+     * rather than interpreted: a whisper of contrast to counter the softness
+     * of a screen capture, and nothing else.
+     */
+    MUSEUM("Museum") {
+        override fun apply(bitmap: Bitmap): Bitmap =
+            applyColorMatrix(bitmap, museumMatrix())
     };
 
     abstract fun apply(bitmap: Bitmap): Bitmap
 }
 
 /**
- * A faded, warm-toned, low-contrast grade with a soft vignette — the
- * standard "old photograph" recipe: less saturated, a little flatter, and
- * warmer than the original.
+ * The filter that suits this site, offered rather than imposed.
+ *
+ * Matched on the site's own name and description, because those are the only
+ * fields that describe what a structure IS — tagIds are Firestore document
+ * ids, which say nothing without a second lookup, and the admin panel has no
+ * "kind of building" field to read.
+ *
+ * Both Filipino and Spanish forms are matched, since Intramuros signage and
+ * Firestore records use all three languages interchangeably: a record may
+ * say Fort Santiago, Fuerza de Santiago or Baluarte, and all three mean a
+ * fortification.
+ *
+ * Returns null when nothing matches, which is most sites and is fine — the
+ * sheet simply offers no suggestion rather than inventing one.
  */
-private fun vintageMatrix(): ColorMatrix {
+private fun suggestedFilterFor(site: HistoricalSite?): CaptureFilter? {
 
-    val matrix = ColorMatrix()
-    matrix.setSaturation(0.75f)
+    val haystack = listOfNotNull(site?.siteName, site?.description)
+        .joinToString(" ")
+        .lowercase()
 
-    val contrast = 0.88f
-    val contrastTranslate = (1f - contrast) / 2f * 255f
-    matrix.postConcat(
-        ColorMatrix(
-            floatArrayOf(
-                contrast, 0f, 0f, 0f, contrastTranslate,
-                0f, contrast, 0f, 0f, contrastTranslate,
-                0f, 0f, contrast, 0f, contrastTranslate,
-                0f, 0f, 0f, 1f, 0f
-            )
-        )
-    )
+    if (haystack.isBlank()) return null
 
-    // A warm cast: a little more red, a touch more green, less blue —
-    // like a print that's aged.
-    matrix.postConcat(
-        ColorMatrix(
-            floatArrayOf(
-                1.08f, 0f, 0f, 0f, 8f,
-                0f, 1.02f, 0f, 0f, 4f,
-                0f, 0f, 0.88f, 0f, -6f,
-                0f, 0f, 0f, 1f, 0f
-            )
-        )
-    )
+    fun mentions(vararg words: String) = words.any { it in haystack }
 
-    return matrix
+    return when {
+
+        mentions("church", "cathedral", "chapel", "basilica", "shrine",
+            "convent", "monastery", "simbahan", "iglesia", "ermita") -> CaptureFilter.SACRED
+
+        // Checked before fortifications, because a ruined fort is a
+        // photograph about the ruin rather than about the fort.
+        mentions("ruin", "ruins", "bombed", "destroyed", "rubble",
+            "world war", "wwii", "liberation", "battle") -> CaptureFilter.WAR
+
+        mentions("fort", "fuerza", "baluarte", "bastion", "rampart",
+            "wall", "muralla", "citadel", "gate", "puerta") -> CaptureFilter.DRAMATIC
+
+        mentions("house", "casa", "bahay", "mansion", "residence",
+            "heritage house", "ancestral") -> CaptureFilter.OLD_PHOTOGRAPH
+
+        else -> null
+    }
 }
 
-/** The textbook luminance-to-brown-tone sepia matrix. */
-private fun sepiaMatrix(): ColorMatrix = ColorMatrix(
+// ----- grades -----
+
+/**
+ * Builds a contrast adjustment as a colour matrix.
+ *
+ * Contrast is a scale about mid-grey rather than about zero, so the scale
+ * has to be paired with a translation that puts 128 back where it started —
+ * without it, raising contrast also raises brightness, and every "contrast"
+ * filter quietly becomes an exposure filter.
+ */
+private fun contrastMatrix(contrast: Float): ColorMatrix {
+    val translate = (1f - contrast) / 2f * 255f
+    return ColorMatrix(
+        floatArrayOf(
+            contrast, 0f, 0f, 0f, translate,
+            0f, contrast, 0f, 0f, translate,
+            0f, 0f, contrast, 0f, translate,
+            0f, 0f, 0f, 1f, 0f
+        )
+    )
+}
+
+/** Per-channel gain and offset — the usual way to express a colour cast. */
+private fun tintMatrix(
+    redGain: Float, greenGain: Float, blueGain: Float,
+    redShift: Float = 0f, greenShift: Float = 0f, blueShift: Float = 0f
+): ColorMatrix = ColorMatrix(
     floatArrayOf(
-        0.393f, 0.769f, 0.189f, 0f, 0f,
-        0.349f, 0.686f, 0.168f, 0f, 0f,
-        0.272f, 0.534f, 0.131f, 0f, 0f,
+        redGain, 0f, 0f, 0f, redShift,
+        0f, greenGain, 0f, 0f, greenShift,
+        0f, 0f, blueGain, 0f, blueShift,
         0f, 0f, 0f, 1f, 0f
     )
 )
 
-/** Black & white with a bit more contrast than a flat desaturation gives. */
-private fun noirMatrix(): ColorMatrix {
-
+private fun warMatrix(): ColorMatrix {
     val matrix = ColorMatrix()
-    matrix.setSaturation(0f)
-
-    val contrast = 1.15f
-    val contrastTranslate = (1f - contrast) / 2f * 255f
-    matrix.postConcat(
-        ColorMatrix(
-            floatArrayOf(
-                contrast, 0f, 0f, 0f, contrastTranslate,
-                0f, contrast, 0f, 0f, contrastTranslate,
-                0f, 0f, contrast, 0f, contrastTranslate,
-                0f, 0f, 0f, 1f, 0f
-            )
-        )
-    )
-
+    matrix.setSaturation(0.20f)
+    matrix.postConcat(contrastMatrix(0.94f))
+    // A cold, slightly green-grey cast, the way wartime stock aged.
+    matrix.postConcat(tintMatrix(0.98f, 1.0f, 0.96f, redShift = 4f, blueShift = 2f))
     return matrix
 }
+
+private fun oldPhotographMatrix(): ColorMatrix {
+    val matrix = ColorMatrix()
+    matrix.setSaturation(0.62f)
+    matrix.postConcat(contrastMatrix(0.90f))
+    matrix.postConcat(tintMatrix(1.07f, 1.01f, 0.88f, redShift = 10f, greenShift = 5f, blueShift = -4f))
+    return matrix
+}
+
+private fun sacredMatrix(): ColorMatrix {
+    val matrix = ColorMatrix()
+    matrix.setSaturation(0.95f)
+    matrix.postConcat(contrastMatrix(0.96f))
+    // Warm, and lifted only in the shadows, so the stone keeps its weight.
+    matrix.postConcat(tintMatrix(1.05f, 1.01f, 0.95f, redShift = 6f, greenShift = 4f))
+    return matrix
+}
+
+private fun goldenHourMatrix(): ColorMatrix {
+    val matrix = ColorMatrix()
+    matrix.setSaturation(1.08f)
+    matrix.postConcat(contrastMatrix(1.04f))
+    matrix.postConcat(tintMatrix(1.09f, 1.02f, 0.90f, redShift = 8f))
+    return matrix
+}
+
+private fun dramaticMatrix(): ColorMatrix {
+    val matrix = ColorMatrix()
+    matrix.setSaturation(0.88f)
+    matrix.postConcat(contrastMatrix(1.22f))
+    // A faint cool cast in what's left of the shadows.
+    matrix.postConcat(tintMatrix(1.0f, 1.0f, 1.03f, blueShift = 2f))
+    return matrix
+}
+
+private fun museumMatrix(): ColorMatrix {
+    val matrix = ColorMatrix()
+    matrix.setSaturation(1.02f)
+    matrix.postConcat(contrastMatrix(1.06f))
+    return matrix
+}
+
+// ----- effects -----
+
+/** The grey-brown of smoke and dust, for [applyHaze]. */
+private val HAZE_SMOKE = android.graphics.Color.rgb(186, 178, 166)
 
 /**
  * Runs [matrix] over every pixel in one draw call — the standard, fast
@@ -4458,6 +5352,186 @@ private fun applyVignette(source: Bitmap, strength: Float): Bitmap {
 }
 
 /**
+ * Film grain, as a small tile of noise repeated across the frame.
+ *
+ * Generating noise at full resolution would mean millions of random values
+ * per photograph and a visible pause on the review sheet. A 96-pixel tile
+ * drawn through a REPEAT shader is one draw call at any output size, and at
+ * the scale grain is actually looked at the repetition is invisible —
+ * nobody finds the seam in a texture whose whole character is being
+ * structureless.
+ */
+private fun applyGrain(source: Bitmap, strength: Float): Bitmap {
+
+    val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(output)
+    canvas.drawBitmap(source, 0f, 0f, null)
+
+    val tileSize = 96
+    val tile = Bitmap.createBitmap(tileSize, tileSize, Bitmap.Config.ARGB_8888)
+    val pixels = IntArray(tileSize * tileSize)
+    val random = java.util.Random(GRAIN_SEED)
+    val alpha = (strength * 255).toInt().coerceIn(0, 255)
+
+    for (index in pixels.indices) {
+        // Monochrome noise: grain is a property of the film, not of the
+        // colour in front of it, so coloured speckle would read as sensor
+        // noise rather than as emulsion.
+        val value = random.nextInt(256)
+        pixels[index] = android.graphics.Color.argb(alpha, value, value, value)
+    }
+
+    tile.setPixels(pixels, 0, tileSize, 0, 0, tileSize, tileSize)
+
+    val paint = Paint().apply {
+        shader = BitmapShader(tile, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
+        // Overlay keeps mid-tones roughly where they were and lets the noise
+        // live in the texture rather than fogging the whole image, which is
+        // what plain alpha compositing would do.
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.OVERLAY)
+    }
+
+    canvas.drawRect(0f, 0f, output.width.toFloat(), output.height.toFloat(), paint)
+
+    tile.recycle()
+
+    return output
+}
+
+/**
+ * A flat wash of [color] across the frame — smoke, dust, or sea haze.
+ *
+ * Uniform rather than graded on purpose: atmospheric haze in a photograph of
+ * a single nearby building is essentially constant across the frame, and
+ * faking a depth gradient would put the haze in the wrong place as soon as
+ * the visitor photographed the structure from the other side.
+ */
+private fun applyHaze(source: Bitmap, strength: Float, color: Int): Bitmap {
+
+    val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(output)
+    canvas.drawBitmap(source, 0f, 0f, null)
+
+    canvas.drawRect(
+        0f, 0f, output.width.toFloat(), output.height.toFloat(),
+        Paint().apply {
+            this.color = color
+            this.alpha = (strength * 255).toInt().coerceIn(0, 255)
+        }
+    )
+
+    return output
+}
+
+/**
+ * Bloom: light spilling out of the brightest parts of the frame.
+ *
+ * The blur is done by throwing the image away and getting it back — a
+ * downscale to an eighth and a filtered upscale is a box blur that the GPU
+ * performs in two draw calls, where a real gaussian at full resolution would
+ * need RenderScript (deprecated) or a per-pixel convolution (far too slow to
+ * sit behind a live filter strip).
+ *
+ * Composited with ADD and through a matrix that keeps only the top of the
+ * tonal range, so it brightens what is already bright and leaves shaded
+ * stone untouched. That is what makes it read as light rather than as a
+ * washed-out exposure.
+ */
+private fun applyBloom(source: Bitmap, strength: Float): Bitmap {
+
+    val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(output)
+    canvas.drawBitmap(source, 0f, 0f, null)
+
+    val smallWidth = (source.width / 8).coerceAtLeast(1)
+    val smallHeight = (source.height / 8).coerceAtLeast(1)
+
+    val small = Bitmap.createScaledBitmap(source, smallWidth, smallHeight, true)
+
+    // Steep gain with a large negative offset: everything below roughly
+    // two-thirds brightness lands at or under zero and contributes nothing.
+    val highlightsOnly = ColorMatrix(
+        floatArrayOf(
+            2.2f, 0f, 0f, 0f, -150f,
+            0f, 2.2f, 0f, 0f, -150f,
+            0f, 0f, 2.2f, 0f, -150f,
+            0f, 0f, 0f, 1f, 0f
+        )
+    )
+
+    val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+        colorFilter = ColorMatrixColorFilter(highlightsOnly)
+        alpha = (strength * 255).toInt().coerceIn(0, 255)
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD)
+    }
+
+    canvas.drawBitmap(
+        small,
+        null,
+        Rect(0, 0, output.width, output.height),
+        paint
+    )
+
+    small.recycle()
+
+    return output
+}
+
+/**
+ * One soft shaft of light entering from above, for the Sacred grade.
+ *
+ * A single wide cone rather than the fan of rays a "god rays" effect would
+ * draw: a cathedral photographed from the floor has one window doing the
+ * work at any given moment, and a symmetrical fan reads as a lens artefact
+ * pasted over the picture instead of as light in the room.
+ *
+ * Drawn with ADD so it can only lighten. Nothing in the architecture is
+ * hidden by it — at the strengths used here the stone stays fully legible
+ * through the brightest part of the shaft.
+ */
+private fun applyLightShaft(source: Bitmap, strength: Float): Bitmap {
+
+    val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(output)
+    canvas.drawBitmap(source, 0f, 0f, null)
+
+    val originX = output.width * 0.68f
+    val originY = output.height * 0.04f
+    val radius = kotlin.math.hypot(output.width.toFloat(), output.height.toFloat()) * 0.8f
+
+    val warmLight = android.graphics.Color.argb(
+        (strength * 255).toInt().coerceIn(0, 255),
+        255, 241, 214
+    )
+
+    val shader = RadialGradient(
+        originX,
+        originY,
+        radius,
+        intArrayOf(warmLight, android.graphics.Color.TRANSPARENT),
+        floatArrayOf(0f, 1f),
+        Shader.TileMode.CLAMP
+    )
+
+    canvas.drawRect(
+        0f, 0f, output.width.toFloat(), output.height.toFloat(),
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            this.shader = shader
+            xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD)
+        }
+    )
+
+    return output
+}
+
+/**
+ * Fixed so grain is identical between a thumbnail and the full-size photo it
+ * previews, and between one preview and the next. A random seed would make
+ * the strip shimmer on every recomposition.
+ */
+private const val GRAIN_SEED = 20261001L
+
+/**
  * A copy of [source] no larger than [maxDimension] on its long side, for
  * work (previews, thumbnails) where the full-resolution capture would be
  * more pixels than the result is ever shown at. Returns [source] itself,
@@ -4476,3 +5550,6 @@ private fun scaledCopy(source: Bitmap, maxDimension: Int): Bitmap {
         true
     )
 }
+
+/** Space between controls in the AR screen's bottom stack. */
+private val BOTTOM_STACK_GAP = 14.dp

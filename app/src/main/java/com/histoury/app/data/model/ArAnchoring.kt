@@ -55,119 +55,27 @@ data class ArReferenceImage(
 )
 
 /**
- * How much of the photo's physical HEIGHT the structure itself occupies,
- * clamped to a sane range.
+ * Whether the AR experience can actually start for this site.
  *
- * Firestore data that is missing, inverted (bottom above top) or otherwise
- * nonsensical falls back to the full frame (1f) rather than producing a
- * zero, negative, or wildly wrong scale factor — the same fail-safe the
- * admin panel's own editor applies when saving.
- */
-val ArReferenceImage.structureHeightFraction: Float
-    get() {
-        val top = structureTopFraction.toFloat().coerceIn(0f, 1f)
-        val bottom = structureBottomFraction.toFloat().coerceIn(0f, 1f)
-        val fraction = bottom - top
-        return if (fraction >= 0.01f) fraction else 1f
-    }
-
-enum class ArAnchorMode {
-    IMAGE,
-    GEOSPATIAL,
-    BOTH;
-
-    val usesImage: Boolean get() = this == IMAGE || this == BOTH
-
-    val usesGeospatial: Boolean get() = this == GEOSPATIAL || this == BOTH
-
-    companion object {
-        /** Missing or unknown -> IMAGE, which is what every older site used. */
-        fun from(raw: String?): ArAnchorMode = when (raw?.trim()?.lowercase()) {
-            "geospatial" -> GEOSPATIAL
-            "both" -> BOTH
-            else -> IMAGE
-        }
-    }
-}
-
-/**
- * The site's anchoring mode.
+ * Two things, and only two: the admin switched AR on, and there is a model
+ * to place. That is the whole contract now.
  *
- * When the admin panel hasn't recorded one (sites saved before the choice
- * existed), a site that has a geospatial placement and no reference photo
- * is treated as GEOSPATIAL — it must deploy by location, not wait for a
- * scan of a photo it doesn't have. Everything else defaults to IMAGE.
- */
-val HistoricalSite.anchorMode: ArAnchorMode
-    get() = if (arAnchorMode.isBlank()) {
-        if (hasGeospatialPlacement && referenceImages.isEmpty()) {
-            ArAnchorMode.GEOSPATIAL
-        } else {
-            ArAnchorMode.IMAGE
-        }
-    } else {
-        ArAnchorMode.from(arAnchorMode)
-    }
-
-/**
- * The reference photos to recognise, primary first.
+ * It used to also demand a complete anchoring method — a reference photo or
+ * a geospatial placement — because the app decided where the structure went
+ * and could not do that without one. Placement is manual now: the visitor
+ * aims at a floor and taps. There is nothing left for the app to be missing.
  *
- * Newer sites list them in [HistoricalSite.arReferenceImages]. Older ones
- * only have the single-photo fields, which become a one-entry list here so
- * the AR screen has one code path.
- */
-val HistoricalSite.referenceImages: List<ArReferenceImage>
-    get() {
-        val listed = arReferenceImages.filter { it.url.isNotBlank() }
-        if (listed.isNotEmpty()) {
-            return listed.mapIndexed { index, image ->
-                if (image.id.isBlank()) image.copy(id = "reference_$index") else image
-            }
-        }
-        if (arReferenceImageUrl.isBlank()) return emptyList()
-        return listOf(
-            ArReferenceImage(
-                id = "reference_primary",
-                label = "Primary photo",
-                url = arReferenceImageUrl,
-                headingDegrees = arHeadingDegrees,
-                offsetRightMeters = arOffsetRightMeters,
-                offsetUpMeters = arOffsetUpMeters,
-                offsetForwardMeters = arOffsetForwardMeters
-            )
-        )
-    }
-
-val HistoricalSite.hasImagePlacement: Boolean
-    get() = referenceImages.isNotEmpty()
-
-/** Same test as the admin panel's hasGeospatialPlacement. */
-val HistoricalSite.hasGeospatialPlacement: Boolean
-    get() {
-        val lat = arLatitude ?: return false
-        val lng = arLongitude ?: return false
-        return lat.isFinite() && lng.isFinite() &&
-            lat in -90.0..90.0 && lng in -180.0..180.0 &&
-            !(lat == 0.0 && lng == 0.0) &&
-            arModelScale.isFinite() && arModelScale > 0.0
-    }
-
-/**
- * Image recognition is switched on AND has at least one photo. False for
- * geospatial scenes even if old photo fields linger on the document, so
- * those scenes never scan.
- */
-val HistoricalSite.imageAnchoringAvailable: Boolean
-    get() = anchorMode.usesImage && hasImagePlacement
-
-/** Geospatial is switched on AND has a complete placement. */
-val HistoricalSite.geospatialAnchoringAvailable: Boolean
-    get() = anchorMode.usesGeospatial && hasGeospatialPlacement
-
-/**
- * Whether the AR experience can actually start: enabled, has a model, and
- * at least one complete anchoring method for its mode.
+ * Leaving the old requirement in place was a real bug, not a tidy-up: the
+ * admin panel deletes the reference-photo and coordinate fields when it
+ * saves a scene, so every newly configured site satisfied `arEnabled` and
+ * `arModelUrl` and then failed this check — Site Details showed "AR
+ * experience coming soon" and ArModelCache silently skipped the download,
+ * for a site that was completely set up.
+ *
+ * WHERE the visitor may run it is a separate question, answered by the
+ * site's geofence inside the AR screen itself (see ArExperienceViewModel.
+ * verifyGeofence). This property is only about whether there is anything to
+ * show.
  */
 val HistoricalSite.isArReady: Boolean
-    get() = arEnabled && arModelUrl.isNotBlank() &&
-        (imageAnchoringAvailable || geospatialAnchoringAvailable)
+    get() = arEnabled && arModelUrl.isNotBlank()

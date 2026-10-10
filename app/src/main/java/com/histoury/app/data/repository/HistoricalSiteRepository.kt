@@ -1,6 +1,7 @@
 package com.histoury.app.data.repository
 
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Source
 import com.histoury.app.data.model.HistoricalSite
 import kotlinx.coroutines.tasks.await
 
@@ -30,6 +31,40 @@ class HistoricalSiteRepository {
 
         } catch (e: Exception) {
             emptyList()
+        }
+    }
+
+    /**
+     * The published sites as the SERVER has them right now, or null when the
+     * server couldn't be reached.
+     *
+     * Unlike [getHistoricalSites] this never answers from the phone's cache,
+     * so an empty or shorter list really means sites were unpublished or
+     * deleted. Offline Downloads uses it to tidy up files for sites that are
+     * gone; it must not act on a cached (possibly out-of-date) list.
+     */
+    suspend fun getPublishedSitesFromServer(): List<HistoricalSite>? {
+
+        return try {
+
+            val snapshot = db
+                .collection("historical_sites")
+                .whereEqualTo("status", "published")
+                .get(Source.SERVER)
+                .await()
+
+            snapshot.documents.mapNotNull { document ->
+
+                val site = document.toObject(HistoricalSite::class.java)
+
+                site?.copy(
+                    documentId = document.id,
+                    siteId = if (site.siteId.isBlank()) document.id else site.siteId
+                )
+            }
+
+        } catch (e: Exception) {
+            null
         }
     }
 

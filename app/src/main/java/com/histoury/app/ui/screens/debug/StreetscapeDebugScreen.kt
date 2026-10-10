@@ -1,5 +1,6 @@
 package com.histoury.app.ui.screens.debug
 
+import com.histoury.app.navigation.safePopBackStack
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
@@ -245,7 +246,7 @@ fun StreetscapeDebugScreen(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) {
-                        navController.popBackStack()
+                        navController.safePopBackStack()
                     }
                     .align(Alignment.CenterStart),
                 contentAlignment = Alignment.Center

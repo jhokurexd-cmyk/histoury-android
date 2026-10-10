@@ -4,11 +4,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
@@ -25,6 +27,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.semantics.error
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -32,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.histoury.app.theme.Outline
 import com.histoury.app.theme.CardSurface
+import com.histoury.app.theme.Danger
 import com.histoury.app.theme.Primary
 import com.histoury.app.theme.SurfaceSoft
 import com.histoury.app.theme.TextPrimary
@@ -53,10 +60,24 @@ fun AuthTextField(
     isPassword: Boolean = false,
     keyboardType: KeyboardType = KeyboardType.Text,
     enabled: Boolean = true,
-    required: Boolean = false
+    required: Boolean = false,
+    // Next moves to the following field; the last field of a form passes
+    // Done plus [onImeAction] so the keyboard's action key submits it.
+    imeAction: ImeAction = ImeAction.Next,
+    onImeAction: (() -> Unit)? = null,
+    // Live validation: the message to show under the field (null = none),
+    // and a callback when the user leaves the field, so a form can start
+    // validating it then. See util/FormValidation.kt.
+    error: String? = null,
+    onFocusLost: (() -> Unit)? = null,
+    // Extra content under the field (e.g. the password checklist).
+    supportingContent: (@Composable () -> Unit)? = null
 ) {
 
     var isPasswordVisible by remember { mutableStateOf(false) }
+    var hadFocus by remember { mutableStateOf(false) }
+
+    Column(modifier = modifier.fillMaxWidth()) {
 
     OutlinedTextField(
         value = value,
@@ -75,7 +96,7 @@ fun AuthTextField(
             Icon(
                 imageVector = leadingIcon,
                 contentDescription = null,
-                tint = TextTertiary
+                tint = if (error != null) Danger else TextTertiary
             )
         },
         trailingIcon = if (isPassword) {
@@ -110,10 +131,21 @@ fun AuthTextField(
             VisualTransformation.None
         },
         keyboardOptions = KeyboardOptions(
-            keyboardType = if (isPassword) KeyboardType.Password else keyboardType
+            keyboardType = if (isPassword) KeyboardType.Password else keyboardType,
+            imeAction = imeAction
         ),
+        keyboardActions = if (onImeAction != null) {
+            KeyboardActions(
+                onDone = { onImeAction() },
+                onGo = { onImeAction() },
+                onSend = { onImeAction() }
+            )
+        } else {
+            KeyboardActions.Default
+        },
         singleLine = true,
         enabled = enabled,
+        isError = error != null,
         shape = RoundedCornerShape(16.dp),
         colors = OutlinedTextFieldDefaults.colors(
             // These fields sit straight on the page, not on a card, so a
@@ -129,8 +161,25 @@ fun AuthTextField(
             focusedTextColor = TextPrimary,
             unfocusedTextColor = TextPrimary,
             focusedLabelColor = Primary,
-            cursorColor = Primary
+            cursorColor = Primary,
+            errorContainerColor = CardSurface,
+            errorBorderColor = Danger,
+            errorLabelColor = Danger,
+            errorCursorColor = Danger,
+            errorTextColor = TextPrimary,
+            errorLeadingIconColor = Danger
         ),
-        modifier = modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { state ->
+                if (hadFocus && !state.isFocused) onFocusLost?.invoke()
+                hadFocus = state.isFocused
+            }
+            .semantics { if (error != null) error(error) }
     )
+
+    FieldErrorText(error)
+
+    supportingContent?.invoke()
+    }
 }

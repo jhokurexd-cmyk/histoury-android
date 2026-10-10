@@ -1,5 +1,6 @@
 package com.histoury.app.ui.screens.auth
 
+import com.histoury.app.navigation.safePopBackStack
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -25,6 +26,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import com.histoury.app.util.Validators
+import com.histoury.app.util.rememberFormState
+import com.histoury.app.ui.components.PasswordChecklist
 import com.histoury.app.data.viewmodel.ForgotPasswordViewModel
 import com.histoury.app.navigation.Routes
 import com.histoury.app.theme.CardSurface
@@ -50,11 +54,27 @@ fun ResetPasswordScreen(
 
     val uiState by forgotPasswordViewModel.uiState.collectAsState()
 
+    // Live validation with the shared password rules.
+    val form = rememberFormState()
+    val passwordError = Validators.newPassword(uiState.newPassword)
+    val confirmError = Validators.confirmPassword(uiState.newPassword, uiState.confirmPassword)
+    fun submit() {
+        if (form.submit(passwordError, confirmError)) forgotPasswordViewModel.resetPassword()
+    }
+
+    // Once the password is reset, the system Back gesture behaves like the
+    // "Back to Login" button — it used to return to the OTP screen for a
+    // code that had already been used.
+    androidx.activity.compose.BackHandler(enabled = uiState.resetSucceeded) {
+        navController.popBackStack(Routes.ForgotPasswordFlow.route, inclusive = true)
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(SurfaceSoft)
             .statusBarsPadding()
+            .imePadding()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 28.dp)
     ) {
@@ -73,7 +93,7 @@ fun ResetPasswordScreen(
                         indication = null,
                         enabled = !uiState.isLoading
                     ) {
-                        navController.popBackStack()
+                        navController.safePopBackStack()
                     },
                 contentAlignment = Alignment.Center
             ) {
@@ -152,22 +172,35 @@ fun ResetPasswordScreen(
 
             AuthTextField(
                 value = uiState.newPassword,
-                onValueChange = { forgotPasswordViewModel.onNewPasswordChange(it) },
+                onValueChange = {
+                    forgotPasswordViewModel.onNewPasswordChange(it)
+                    form.touch("password")
+                },
                 label = "New Password",
                 leadingIcon = Icons.Default.Lock,
                 isPassword = true,
-                enabled = !uiState.isLoading
+                enabled = !uiState.isLoading,
+                error = form.shown("password", passwordError),
+                onFocusLost = { form.touch("password") },
+                supportingContent = { PasswordChecklist(uiState.newPassword) }
             )
 
             Spacer(Modifier.height(12.dp))
 
             AuthTextField(
                 value = uiState.confirmPassword,
-                onValueChange = { forgotPasswordViewModel.onConfirmPasswordChange(it) },
+                onValueChange = {
+                    forgotPasswordViewModel.onConfirmPasswordChange(it)
+                    form.touch("confirmPassword")
+                },
                 label = "Confirm New Password",
                 leadingIcon = Icons.Default.Password,
                 isPassword = true,
-                enabled = !uiState.isLoading
+                enabled = !uiState.isLoading,
+                imeAction = androidx.compose.ui.text.input.ImeAction.Done,
+                onImeAction = { submit() },
+                error = form.shown("confirmPassword", confirmError),
+                onFocusLost = { form.touch("confirmPassword") }
             )
 
             if (uiState.errorMessage != null) {
@@ -185,7 +218,7 @@ fun ResetPasswordScreen(
             PrimaryButton(
                 text = "Reset Password",
                 isLoading = uiState.isLoading,
-                onClick = { forgotPasswordViewModel.resetPassword() }
+                onClick = { submit() }
             )
         }
 

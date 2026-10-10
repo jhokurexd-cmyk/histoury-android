@@ -1,5 +1,6 @@
 package com.histoury.app.ui.screens.review
 
+import com.histoury.app.navigation.safePopBackStack
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -36,6 +37,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
+import com.histoury.app.ui.components.CharacterCounter
+import com.histoury.app.ui.components.FieldErrorText
+import com.histoury.app.util.Validators
 import com.histoury.app.data.viewmodel.RateReviewViewModel
 import com.histoury.app.ui.components.PrimaryButton
 import com.histoury.app.theme.Outline
@@ -71,7 +75,7 @@ fun RateReviewScreen(
                 "Thanks for your review!",
                 android.widget.Toast.LENGTH_SHORT
             ).show()
-            navController.popBackStack()
+            navController.safePopBackStack()
         }
     }
 
@@ -98,7 +102,7 @@ fun RateReviewScreen(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) {
-                    navController.popBackStack()
+                    navController.safePopBackStack()
                 }
             )
 
@@ -170,7 +174,12 @@ fun RateReviewScreen(
             ) {
 
                 Text(
-                    text = "How was your AR experience?",
+                    // Site reviews cover the whole visit, AR included.
+                    text = if (uiState.isUpdatingExisting) {
+                        "Update your rating"
+                    } else {
+                        "How was your visit?"
+                    },
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp
                 )
@@ -237,6 +246,7 @@ fun RateReviewScreen(
                 OutlinedTextField(
                     value = uiState.reviewText,
                     onValueChange = { rateReviewViewModel.onReviewTextChanged(it) },
+                    isError = uiState.reviewText.trim().length > Validators.REVIEW_MAX || uiState.textError != null,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(120.dp),
@@ -256,13 +266,13 @@ fun RateReviewScreen(
                     shape = RoundedCornerShape(12.dp)
                 )
 
+                // Profanity, links or contact details, as they type.
+                FieldErrorText(uiState.textError)
+
                 Spacer(Modifier.height(4.dp))
 
-                Text(
-                    text = "${uiState.reviewText.length} / 500 characters",
-                    color = Color.Gray,
-                    fontSize = 11.sp
-                )
+                // Live count against the server's 500-character limit.
+                CharacterCounter(uiState.reviewText.length, Validators.REVIEW_MAX)
             }
 
             if (uiState.errorMessage != null) {
@@ -285,7 +295,7 @@ fun RateReviewScreen(
             } else {
 
                 PrimaryButton(
-                    text = "Submit Review",
+                    text = if (uiState.isUpdatingExisting) "Update Review" else "Submit Review",
                     onClick = {
                         rateReviewViewModel.submitReview(visitId)
                     }

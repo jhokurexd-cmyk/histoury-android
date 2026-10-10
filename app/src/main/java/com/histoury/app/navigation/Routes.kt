@@ -64,12 +64,25 @@ sealed class Routes(val route: String) {
     // Standalone map tab: all sites at once, no siteId required
     object MapOverview : Routes("map_overview")
 
-    object Map : Routes("map/{siteId}") {
-        fun createRoute(siteId: String) = "map/${siteId.asRouteArgument()}"
+    // autoStart: open straight into turn-by-turn navigation instead of the
+    // route preview. Used by itinerary actions ("Start Trip Now", "Continue
+    // to Next Stop", "Skip stop"), where the visitor has already said go —
+    // they used to land on the preview and have to tap Navigate again.
+    object Map : Routes("map/{siteId}?autoStart={autoStart}") {
+        fun createRoute(siteId: String, autoStart: Boolean = false) =
+            "map/${siteId.asRouteArgument()}?autoStart=$autoStart"
     }
 
     object Arrival : Routes("arrival/{siteId}") {
         fun createRoute(siteId: String) = "arrival/${siteId.asRouteArgument()}"
+    }
+
+    // Trip completion summary — shown once an itinerary's final stop
+    // resolves (Complete or Skip). Takes the itinerary's document id so the
+    // screen reads its final tally straight from Firestore rather than any
+    // screen carrying its own copy of trip progress.
+    object TripComplete : Routes("trip_complete/{itineraryId}") {
+        fun createRoute(itineraryId: String) = "trip_complete/${itineraryId.asRouteArgument()}"
     }
 
     object History : Routes("history")
@@ -89,6 +102,12 @@ sealed class Routes(val route: String) {
     // Site Library (Menu > Site Information): every historical site, with
     // ones the person hasn't physically visited yet shown locked.
     object SiteLibrary : Routes("site_library")
+
+    // "View all" from a Home section: the full list behind it. [mode] is
+    // "nearest", "popular", "all", or "places:<category>".
+    object SiteList : Routes("site_list/{mode}") {
+        fun createRoute(mode: String) = "site_list/${mode.asRouteArgument()}"
+    }
 
     // Place Details: the showcase screen for non-historical places (cafés,
     // restaurants, hotels, souvenir shops, schools, banks). Unlike sites,
@@ -113,6 +132,9 @@ sealed class Routes(val route: String) {
 
     object Downloads : Routes("downloads")
 
+    // Menu > Favorites: the historical sites the visitor has hearted.
+    object Favorites : Routes("favorites")
+
     // TEMPORARY — on-site test tool for checking whether ARCore's
     // Streetscape Geometry sees building shapes at Fort Santiago and
     // Baluarte de San Diego. Not part of the visitor-facing app. Safe to
@@ -120,9 +142,12 @@ sealed class Routes(val route: String) {
     // section in MenuScreen.kt once on-site testing is done.
     object StreetscapeDebug : Routes("streetscape_debug")
 
-    // Reviews
-    object Review : Routes("review/{siteId}/{visitId}") {
+    // Reviews. visitId is a query argument because it can be empty — a
+    // visit still queued offline has no document id yet — and an empty
+    // path segment ("review/fort_santiago/") matches no destination, so
+    // navigate() threw and crashed the app from Visit History.
+    object Review : Routes("review/{siteId}?visitId={visitId}") {
         fun createRoute(siteId: String, visitId: String) =
-            "review/${siteId.asRouteArgument()}/${visitId.asRouteArgument()}"
+            "review/${siteId.asRouteArgument()}?visitId=${visitId.asRouteArgument()}"
     }
 }

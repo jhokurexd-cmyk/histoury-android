@@ -45,6 +45,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.heightIn
+import com.histoury.app.theme.TextTertiary
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.filled.PlayArrow
@@ -514,20 +517,25 @@ fun SiteContentTabRow(
                     .background(if (isSelected) Primary else Color.Transparent)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
-                        indication = null
+                        indication = null,
+                        role = androidx.compose.ui.semantics.Role.Tab
                     ) {
                         onTabSelected(tab)
                     }
-                    .padding(vertical = 8.dp),
+                    // 40dp tall with the row's padding: four pills across a
+                    // phone are narrow, so height is where the tap target
+                    // can grow.
+                    .padding(vertical = 10.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = label,
+                    maxLines = 1,
                     // OnColor rather than a literal white: the pill behind it
                     // is the brand colour in both themes, so its label has to
                     // be the matching on-brand ink in both too.
                     color = if (isSelected) OnColor else TextSecondary,
-                    fontSize = 12.sp,
+                    fontSize = 12.5.sp,
                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                 )
             }
@@ -556,9 +564,21 @@ fun SiteContentTabBody(
     voiceover: VoiceoverController? = null
 ) {
 
-    Column(modifier = modifier) {
+    // A quick crossfade, so switching tabs doesn't snap the page to a new
+    // height mid-read. Fade only: sliding sideways inside a vertically
+    // scrolling page reads as the page itself moving.
+    AnimatedContent(
+        targetState = selectedTab,
+        modifier = modifier,
+        transitionSpec = {
+            fadeIn(tween(180, delayMillis = 60)) togetherWith fadeOut(tween(90))
+        },
+        label = "siteContentTab"
+    ) { tab ->
 
-        when (selectedTab) {
+    Column {
+
+        when (tab) {
 
             // The site's own short description stands in when the content
             // document has no overview written yet — better a teaser than an
@@ -583,6 +603,7 @@ fun SiteContentTabBody(
                 onSourceClick = onSourceClick
             )
         }
+    }
     }
 }
 
@@ -654,11 +675,14 @@ private fun OverviewTabContent(
             Spacer(Modifier.height(14.dp))
         }
 
+        // Long-form reading: a touch larger and more open than the UI text
+        // around it, and in the primary ink — secondary grey across a full
+        // history strained the eye, especially in dark mode.
         Text(
             text = overview.ifBlank { "No overview available yet." },
-            color = TextSecondary,
-            fontSize = 14.sp,
-            lineHeight = 22.sp,
+            color = TextPrimary.copy(alpha = 0.86f),
+            fontSize = 15.sp,
+            lineHeight = 24.sp,
             maxLines = if (expanded) Int.MAX_VALUE else COLLAPSED_OVERVIEW_LINES,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.animateContentSize(animationSpec = tween(220))
@@ -725,23 +749,47 @@ private fun TimelineTabContent(entries: List<TimelineEntry>) {
         return
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column {
 
-        entries.forEach { entry ->
+        entries.forEachIndexed { index, entry ->
 
-            Row {
+            // IntrinsicSize.Min lets the rail stretch to the entry's height,
+            // so the dots read as one connected line through time rather
+            // than as a bulleted list.
+            Row(modifier = Modifier.height(IntrinsicSize.Min)) {
 
-                Box(
+                Column(
                     modifier = Modifier
-                        .padding(top = 4.dp)
-                        .size(10.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(Primary)
-                )
+                        .width(14.dp)
+                        .fillMaxHeight(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+
+                    Box(
+                        modifier = Modifier
+                            .padding(top = 4.dp)
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(Primary)
+                    )
+
+                    if (index != entries.lastIndex) {
+                        Box(
+                            modifier = Modifier
+                                .padding(vertical = 4.dp)
+                                .width(2.dp)
+                                .weight(1f)
+                                .clip(RoundedCornerShape(50))
+                                .background(Outline)
+                        )
+                    }
+                }
 
                 Spacer(Modifier.width(12.dp))
 
-                Column {
+                Column(
+                    modifier = Modifier.padding(bottom = if (index != entries.lastIndex) 18.dp else 0.dp)
+                ) {
 
                     Text(
                         text = entry.year.ifBlank { "Undated" },
@@ -750,13 +798,13 @@ private fun TimelineTabContent(entries: List<TimelineEntry>) {
                         fontSize = 13.sp
                     )
 
-                    Spacer(Modifier.height(2.dp))
+                    Spacer(Modifier.height(3.dp))
 
                     Text(
                         text = entry.event,
-                        color = TextSecondary,
-                        fontSize = 14.sp,
-                        lineHeight = 20.sp
+                        color = TextPrimary.copy(alpha = 0.86f),
+                        fontSize = 14.5.sp,
+                        lineHeight = 22.sp
                     )
                 }
             }
@@ -776,9 +824,22 @@ private fun StoriesTabContent(
         return
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+    Column {
 
         entries.forEachIndexed { index, entry ->
+
+            // A hairline between stories: with several of them one after
+            // another, the titles alone didn't make it obvious where one
+            // ended and the next began.
+            if (index > 0) {
+                Box(
+                    modifier = Modifier
+                        .padding(vertical = 18.dp)
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(Outline.copy(alpha = 0.6f))
+                )
+            }
 
             Column {
 
@@ -790,7 +851,8 @@ private fun StoriesTabContent(
                     Text(
                         text = entry.title.ifBlank { "Untitled Story" },
                         fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
+                        fontSize = 16.sp,
+                        lineHeight = 22.sp,
                         color = TextPrimary,
                         modifier = Modifier.weight(1f)
                     )
@@ -802,13 +864,13 @@ private fun StoriesTabContent(
                     VoiceoverButton("story_$index", audioUrls["story_$index"], voiceover)
                 }
 
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
 
                 Text(
                     text = entry.content,
-                    color = TextSecondary,
-                    fontSize = 14.sp,
-                    lineHeight = 22.sp
+                    color = TextPrimary.copy(alpha = 0.86f),
+                    fontSize = 14.5.sp,
+                    lineHeight = 23.sp
                 )
             }
         }
@@ -826,36 +888,76 @@ private fun SourcesTabContent(
         return
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
 
-        entries.forEach { entry ->
+        entries.forEachIndexed { index, entry ->
 
+            val domain = remember(entry.url) {
+                runCatching { android.net.Uri.parse(entry.url).host?.removePrefix("www.") }
+                    .getOrNull()
+                    .orEmpty()
+            }
+            val hasLink = entry.url.isNotBlank()
+
+            // A full-width row at least 48dp tall: the old underlined line
+            // of text was a hard target to hit, and gave no hint where it
+            // would go.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(SurfaceSoft)
                     .clickable(
+                        enabled = hasLink,
+                        onClickLabel = "Open source",
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) {
                         onSourceClick(entry.url)
-                    },
+                    }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
 
                 Text(
-                    text = entry.title.ifBlank { entry.url },
+                    text = "${index + 1}",
                     color = Primary,
-                    fontSize = 14.sp,
-                    textDecoration = TextDecoration.Underline,
-                    modifier = Modifier.weight(1f)
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.width(22.dp)
                 )
 
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-                    contentDescription = null,
-                    tint = Primary,
-                    modifier = Modifier.size(16.dp)
-                )
+                Column(modifier = Modifier.weight(1f)) {
+
+                    Text(
+                        text = entry.title.ifBlank { entry.url },
+                        color = TextPrimary,
+                        fontSize = 14.sp,
+                        lineHeight = 19.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+
+                    if (domain.isNotBlank() && entry.title.isNotBlank()) {
+                        Text(
+                            text = domain,
+                            color = TextTertiary,
+                            fontSize = 11.5.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                if (hasLink) {
+                    Spacer(Modifier.width(8.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                        contentDescription = null,
+                        tint = Primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
     }

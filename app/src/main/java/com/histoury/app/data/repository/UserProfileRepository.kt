@@ -181,7 +181,18 @@ class UserProfileRepository {
             val photoRef = storage.reference
                 .child("profile-images/${user.uid}/profile.jpg")
 
-            photoRef.putFile(localImageUri).await()
+            // An explicit image type: the Storage rules only accept image/*
+            // here, so an inferred "application/octet-stream" (a file:// URI
+            // with no extension) would be refused.
+            val contentType = com.google.firebase.FirebaseApp.getInstance()
+                .applicationContext.contentResolver.getType(localImageUri)
+                ?.takeIf { it.startsWith("image/") }
+                ?: "image/jpeg"
+            val metadata = com.google.firebase.storage.StorageMetadata.Builder()
+                .setContentType(contentType)
+                .build()
+
+            photoRef.putFile(localImageUri, metadata).await()
 
             val downloadUrl = photoRef.downloadUrl.await()
 

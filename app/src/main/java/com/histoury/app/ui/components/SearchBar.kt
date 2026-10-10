@@ -24,6 +24,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
@@ -58,7 +63,9 @@ fun SearchBar(
             )
             .clip(RoundedCornerShape(26.dp))
             .background(CardSurface)
-            .padding(horizontal = 16.dp),
+            // Less on the right: the trailing buttons carry their own 44dp
+            // touch area, which supplies that side's breathing room.
+            .padding(start = 16.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
 
@@ -86,10 +93,15 @@ fun SearchBar(
                 )
             }
 
+            val focusManager = LocalFocusManager.current
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = true,
+                // Results filter as you type; the keyboard's Search key just
+                // puts the keyboard away so they can be seen.
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
                 textStyle = MaterialTheme.typography.bodyMedium.copy(
                     color = TextPrimary,
                     lineHeight = 16.sp
@@ -99,13 +111,33 @@ fun SearchBar(
             )
         }
 
-        Spacer(Modifier.width(8.dp))
+        if (value.isNotEmpty()) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { onValueChange("") }
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Clear search",
+                    tint = TextTertiary,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
 
+        // 44dp to tap, 34dp to see. It was a 32dp target, small enough to
+        // miss and land in the text field instead.
         Box(
             modifier = Modifier
-                .size(32.dp)
+                .size(44.dp)
                 .clip(CircleShape)
-                .background(if (hasActiveFilters) PrimarySoft else Color.Transparent)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -113,12 +145,20 @@ fun SearchBar(
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                imageVector = Icons.Default.Tune,
-                contentDescription = "Filter by tags",
-                tint = if (hasActiveFilters) Primary else TextTertiary,
-                modifier = Modifier.size(18.dp)
-            )
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(if (hasActiveFilters) PrimarySoft else Color.Transparent),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Tune,
+                    contentDescription = if (hasActiveFilters) "Filter by tags (active)" else "Filter by tags",
+                    tint = if (hasActiveFilters) Primary else TextTertiary,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
         }
     }
 }
