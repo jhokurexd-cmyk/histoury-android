@@ -29,11 +29,16 @@ class HistouryApp : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
+        // First, so a crash anywhere after this is recorded (debug builds
+        // show it on the next launch).
+        com.histoury.app.util.CrashReport.install(this)
         configureFirestoreCache()
         // "Location is off" in the notification shade, for as long as it is.
         com.histoury.app.location.LocationStatusNotifier.start(this)
         // Favorites tapped with no signal are kept and sent once back online.
         com.histoury.app.data.repository.FavoritesRepository.init(this)
+        // "Avoid expressways and tolls" for car routes, remembered per phone.
+        com.histoury.app.data.repository.DriveOptions.load(this)
     }
 
     /**

@@ -18,6 +18,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
 import androidx.lifecycle.Lifecycle
 import androidx.navigation.compose.rememberNavController
 import com.google.firebase.auth.FirebaseAuth
@@ -27,6 +29,8 @@ import com.histoury.app.data.repository.AccountStatus
 import com.histoury.app.data.repository.AuthRepository
 import com.histoury.app.data.repository.SuspensionInfoHolder
 import com.histoury.app.location.ArrivalEventBus
+import com.histoury.app.location.ArrivalWatcher
+import androidx.lifecycle.repeatOnLifecycle
 import com.histoury.app.location.SessionCleanup
 import com.histoury.app.navigation.NavGraph
 import com.histoury.app.navigation.Routes
@@ -109,6 +113,17 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // In-app arrival detection while Histoury is on screen: being inside
+        // a site's radius opens its Arrival screen even if the phone never
+        // "crossed" the fence (e.g. the app was opened at the site). Stops
+        // when the app leaves the screen; background arrivals stay with
+        // Android's geofencing.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                ArrivalWatcher.watch(this@MainActivity)
+            }
+        }
+
         // Android 12+: let the system shrink the app into the floating mini
         // map by itself when the visitor leaves mid-navigation (Home,
         // gesture, recents) — smoother than doing it from onUserLeaveHint.
@@ -148,6 +163,19 @@ class MainActivity : ComponentActivity() {
 
                     val navController =
                         rememberNavController()
+
+                    // Which screen is open, for the crash report.
+                    androidx.compose.runtime.DisposableEffect(navController) {
+                        val listener = androidx.navigation.NavController.OnDestinationChangedListener { _, destination, _ ->
+                            com.histoury.app.util.CrashReport.currentScreen = destination.route ?: "?"
+                        }
+                        navController.addOnDestinationChangedListener(listener)
+                        onDispose { navController.removeOnDestinationChangedListener(listener) }
+                    }
+
+                    // Debug builds: if the app closed unexpectedly last time,
+                    // say why (copyable), instead of leaving no trace.
+                    CrashReportDialog()
 
                     LaunchedEffect(pendingArrivalSiteId) {
 
@@ -436,3 +464,61 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_ARRIVAL_SITE_ID = "arrival_site_id"
     }
 }
+
+/**
+ * Shows the last crash once, on the next launch, in debug builds only, with
+ * Copy and Share so the error can be sent on. Never shown to real users.
+ */
+@androidx.compose.runtime.Composable
+private fun CrashReportDialog() {
+    if (!BuildConfig.DEBUG) return
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var report by androidx.compose.runtime.remember {
+        mutableStateOf(com.histoury.app.util.CrashReport.takePending(context))
+    }
+    val text = report ?: return
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { report = null },
+        title = { androidx.compose.material3.Text("Histoury closed unexpectedly") },
+        text = {
+            androidx.compose.foundation.layout.Column(
+                modifier = Modifier
+                    .crashReportMaxHeight()
+                    .crashReportScroll()
+            ) {
+                androidx.compose.material3.Text(
+                    text = text,
+                    fontSize = androidx.compose.ui.unit.TextUnit(11f, androidx.compose.ui.unit.TextUnitType.Sp),
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                )
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = {
+                val send = Intent(Intent.ACTION_SEND)
+                    .setType("text/plain")
+                    .putExtra(Intent.EXTRA_SUBJECT, "Histoury crash report")
+                    .putExtra(Intent.EXTRA_TEXT, text)
+                runCatching { context.startActivity(Intent.createChooser(send, "Share crash report")) }
+            }) { androidx.compose.material3.Text("Share") }
+        },
+        dismissButton = {
+            androidx.compose.foundation.layout.Row {
+                androidx.compose.material3.TextButton(onClick = {
+                    val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+                    clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Histoury crash", text))
+                }) { androidx.compose.material3.Text("Copy") }
+                androidx.compose.material3.TextButton(onClick = { report = null }) {
+                    androidx.compose.material3.Text("Close")
+                }
+            }
+        }
+    )
+}
+
+@androidx.compose.runtime.Composable
+private fun Modifier.crashReportScroll(): Modifier =
+    this.verticalScroll(androidx.compose.foundation.rememberScrollState())
+
+private fun Modifier.crashReportMaxHeight(): Modifier =
+    this.heightIn(max = androidx.compose.ui.unit.Dp(420f))

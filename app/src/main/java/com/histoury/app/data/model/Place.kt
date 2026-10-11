@@ -50,6 +50,10 @@ data class Place(
 
     val contactEmail: String = "",
 
+    // Hotels only: the hotel's own booking page or listing, set in the admin
+    // panel. "Book or check rates" opens it; Histoury takes no bookings.
+    val bookingUrl: String = "",
+
     val openingHours: String = "",
 
     // Free text, e.g. "₱75" or "Free" — blank means not set. Matches the

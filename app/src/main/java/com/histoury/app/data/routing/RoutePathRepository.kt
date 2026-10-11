@@ -78,6 +78,18 @@ class RoutePathRepository(
         return RoutePath(legs = legs.sortedBy { it.toIndex }, mode = mode)
     }
 
+    /**
+     * One route from [origin] to [destination] (e.g. from where the visitor
+     * is now to the trip's first stop). Same caching and fallback as a leg
+     * between stops; the result's indices are -1 -> 0.
+     */
+    suspend fun getLeg(
+        origin: LatLng,
+        destination: LatLng,
+        mode: TravelMode,
+        destinationSiteId: String? = null
+    ): RouteLeg = fetchLeg(-1, 0, origin, destination, mode, destinationSiteId)
+
     private suspend fun fetchLeg(
         fromIndex: Int,
         toIndex: Int,
@@ -87,7 +99,10 @@ class RoutePathRepository(
         destinationSiteId: String? = null
     ): RouteLeg {
 
-        val key = cacheKey(origin, destination, mode) + "|" + destinationSiteId.orEmpty()
+        // The "avoid expressways and tolls" choice gives a different car
+        // route, so it is part of the cache key.
+        val key = cacheKey(origin, destination, mode) + "|" + destinationSiteId.orEmpty() +
+            "|" + com.histoury.app.data.repository.DriveOptions.avoidFor(mode)
 
         legCache[key]?.let { cached ->
             return cached.copy(fromIndex = fromIndex, toIndex = toIndex)
@@ -107,7 +122,10 @@ class RoutePathRepository(
                 isStraightLineFallback = false,
                 attribution = result.attribution,
                 endsAtVerifiedEntrance = result.destination?.isVerifiedEntrance == true,
-                warnings = result.warnings
+                warnings = result.warnings,
+                // Kept for commute only: the other modes' turn-by-turn steps
+                // aren't shown in the itinerary, so they'd just use memory.
+                steps = if (mode == TravelMode.COMMUTE) result.steps else emptyList()
             )
 
         } else {
@@ -153,6 +171,7 @@ class RoutePathRepository(
             TravelMode.WALKING -> WALKING_METERS_PER_SECOND
             TravelMode.DRIVING -> DRIVING_METERS_PER_SECOND
             TravelMode.MOTORCYCLE -> MOTORCYCLE_METERS_PER_SECOND
+            TravelMode.COMMUTE -> COMMUTE_METERS_PER_SECOND
         }
 
         return RouteLeg(
@@ -196,5 +215,9 @@ class RoutePathRepository(
         private const val DRIVING_METERS_PER_SECOND = 6.5f
 
         private const val MOTORCYCLE_METERS_PER_SECOND = 7.5f
+
+        // Door to door by public transport incl. walking and waiting —
+        // only used for the rough estimate when no route could be found.
+        private const val COMMUTE_METERS_PER_SECOND = 3.5f
     }
 }

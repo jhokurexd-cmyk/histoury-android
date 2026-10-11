@@ -48,24 +48,28 @@ fun SearchBar(
     onFilterClick: () -> Unit = {},
     hasActiveFilters: Boolean = false,
     modifier: Modifier = Modifier,
-    placeholder: String = "Search historical sites, places..."
+    placeholder: String = "Search historical sites, places...",
+    // Off where there's no tag filter to open (e.g. the itinerary builder).
+    showFilterButton: Boolean = true,
+    // Shorter where screen space is tight (the itinerary builder, View all).
+    height: androidx.compose.ui.unit.Dp = 52.dp
 ) {
 
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .height(52.dp)
+            .height(height)
             .shadow(
                 elevation = 6.dp,
-                shape = RoundedCornerShape(26.dp),
+                shape = RoundedCornerShape(height / 2),
                 ambientColor = Primary.copy(alpha = 0.15f),
                 spotColor = Primary.copy(alpha = 0.15f)
             )
-            .clip(RoundedCornerShape(26.dp))
+            .clip(RoundedCornerShape(height / 2))
             .background(CardSurface)
             // Less on the right: the trailing buttons carry their own 44dp
             // touch area, which supplies that side's breathing room.
-            .padding(start = 16.dp, end = 4.dp),
+            .padding(start = 16.dp, end = if (showFilterButton || value.isNotEmpty()) 4.dp else 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
 
@@ -134,7 +138,7 @@ fun SearchBar(
 
         // 44dp to tap, 34dp to see. It was a 32dp target, small enough to
         // miss and land in the text field instead.
-        Box(
+        if (showFilterButton) Box(
             modifier = Modifier
                 .size(44.dp)
                 .clip(CircleShape)

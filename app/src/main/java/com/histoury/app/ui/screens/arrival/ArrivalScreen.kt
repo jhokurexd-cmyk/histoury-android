@@ -106,6 +106,8 @@ import com.histoury.app.theme.TextTertiary
 import com.histoury.app.ui.components.PrimaryButton
 import com.histoury.app.ui.components.rememberThemedMapColorScheme
 import com.histoury.app.ui.components.rememberThemedMapProperties
+import com.histoury.app.map.MapConfig
+import com.histoury.app.ui.map.ArrivalMapLibre
 import kotlin.math.ceil
 
 // =============================================================================
@@ -217,6 +219,8 @@ fun ArrivalScreen(
 
         // After a stop is finished, frame the way on to the next one.
         LaunchedEffect(uiState.lastStopOutcome, nextLatLng) {
+            // The MapLibre map frames this itself (ArrivalMapLibre).
+            if (MapConfig.useMapLibre) return@LaunchedEffect
             if (uiState.lastStopOutcome != null && siteLatLng != null && nextLatLng != null) {
                 runCatching {
                     val bounds = com.google.android.gms.maps.model.LatLngBounds.builder()
@@ -228,7 +232,20 @@ fun ArrivalScreen(
             }
         }
 
-        GoogleMap(
+        if (MapConfig.useMapLibre) {
+            ArrivalMapLibre(
+                siteLatLng = siteLatLng,
+                siteTitle = site?.siteName ?: "You've arrived",
+                siteImageUrl = site?.featuredImage,
+                nextLatLng = nextLatLng,
+                nextTitle = nextStop?.name,
+                showNext = uiState.lastStopOutcome != null,
+                showUserLocation = hasLocationPermission,
+                topInsetDp = WindowInsets.statusBars.asPaddingValues().calculateTopPadding().value,
+                bottomInsetDp = if (expanded) 300f else 96f,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else GoogleMap(
             modifier = Modifier.fillMaxSize(),
             cameraPositionState = cameraPositionState,
             // Keeps the map's logo / controls clear of the status bar and of

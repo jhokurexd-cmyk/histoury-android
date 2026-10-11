@@ -130,140 +130,6 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun showArrivalNotification(
-        context: Context,
-        siteId: String
-    ) {
-
-        createNotificationChannel(context)
-
-        val soundUri = arrivalSoundUri(context)
-
-        val contentIntent =
-            Intent(
-                context,
-                MainActivity::class.java
-            ).apply {
-
-                flags =
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_CLEAR_TOP
-
-                putExtra(
-                    MainActivity.EXTRA_ARRIVAL_SITE_ID,
-                    siteId
-                )
-            }
-
-        val contentPendingIntent =
-            PendingIntent.getActivity(
-                context,
-                siteId.hashCode(),
-                contentIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or
-                        PendingIntent.FLAG_IMMUTABLE
-            )
-
-        val notification =
-            NotificationCompat.Builder(
-                context,
-                CHANNEL_ID
-            )
-                .setSmallIcon(
-                    R.drawable.ic_launcher_foreground
-                )
-                .setContentTitle(
-                    "You've Arrived!"
-                )
-                .setContentText(
-                    "Tap to discover this site's history."
-                )
-                .setPriority(
-                    NotificationCompat.PRIORITY_HIGH
-                )
-                .setSound(soundUri)
-                .setAutoCancel(true)
-                .setContentIntent(contentPendingIntent)
-                .build()
-
-        // POST_NOTIFICATIONS only exists on Android 13+. Below that,
-        // checkSelfPermission() reports it as DENIED, which silenced every
-        // arrival notification on Android 8-12.
-        val hasPermission =
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-                ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.POST_NOTIFICATIONS
-                ) == PackageManager.PERMISSION_GRANTED
-
-        if (hasPermission) {
-
-            NotificationManagerCompat
-                .from(context)
-                .notify(
-                    siteId.hashCode(),
-                    notification
-                )
-        }
-    }
-
-    private fun createNotificationChannel(
-        context: Context
-    ) {
-
-        val soundUri = arrivalSoundUri(context)
-
-        val audioAttributes =
-            AudioAttributes.Builder()
-                .setUsage(
-                    AudioAttributes.USAGE_NOTIFICATION
-                )
-                .setContentType(
-                    AudioAttributes.CONTENT_TYPE_SONIFICATION
-                )
-                .build()
-
-        val channel =
-            NotificationChannel(
-                CHANNEL_ID,
-                "Site Arrivals",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-
-                description =
-                    "Notifies you when you arrive at a historical site"
-
-                setSound(
-                    soundUri,
-                    audioAttributes
-                )
-
-                enableVibration(true)
-            }
-
-        val notificationManager =
-            context.getSystemService(
-                NotificationManager::class.java
-            )
-
-        // The v2 channel saved its sound by numeric resource ID, which can
-        // change between builds. Channel sounds can't be edited after
-        // creation, so it's replaced by v3 rather than updated.
-        notificationManager.deleteNotificationChannel(
-            LEGACY_CHANNEL_ID
-        )
-
-        notificationManager.createNotificationChannel(
-            channel
-        )
-    }
-
-    // By resource name, not R.raw's numeric ID: the system stores this URI
-    // with the channel, and numeric IDs aren't stable across app updates.
-    private fun arrivalSoundUri(context: Context) =
-        "android.resource://${context.packageName}/raw/arrival_chime"
-            .toUri()
-
     companion object {
 
         private const val CHANNEL_ID =
@@ -271,5 +137,140 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
         private const val LEGACY_CHANNEL_ID =
             "site_arrivals_custom_sound_v2"
+
+        /** Also used by [ArrivalWatcher] for arrivals noticed while the app is open. */
+        fun showArrivalNotification(
+            context: Context,
+            siteId: String
+        ) {
+
+            createNotificationChannel(context)
+
+            val soundUri = arrivalSoundUri(context)
+
+            val contentIntent =
+                Intent(
+                    context,
+                    MainActivity::class.java
+                ).apply {
+
+                    flags =
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                                Intent.FLAG_ACTIVITY_CLEAR_TOP
+
+                    putExtra(
+                        MainActivity.EXTRA_ARRIVAL_SITE_ID,
+                        siteId
+                    )
+                }
+
+            val contentPendingIntent =
+                PendingIntent.getActivity(
+                    context,
+                    siteId.hashCode(),
+                    contentIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or
+                            PendingIntent.FLAG_IMMUTABLE
+                )
+
+            val notification =
+                NotificationCompat.Builder(
+                    context,
+                    CHANNEL_ID
+                )
+                    .setSmallIcon(
+                        R.drawable.ic_launcher_foreground
+                    )
+                    .setContentTitle(
+                        "You've Arrived!"
+                    )
+                    .setContentText(
+                        "Tap to discover this site's history."
+                    )
+                    .setPriority(
+                        NotificationCompat.PRIORITY_HIGH
+                    )
+                    .setSound(soundUri)
+                    .setAutoCancel(true)
+                    .setContentIntent(contentPendingIntent)
+                    .build()
+
+            // POST_NOTIFICATIONS only exists on Android 13+. Below that,
+            // checkSelfPermission() reports it as DENIED, which silenced every
+            // arrival notification on Android 8-12.
+            val hasPermission =
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.POST_NOTIFICATIONS
+                    ) == PackageManager.PERMISSION_GRANTED
+
+            if (hasPermission) {
+
+                NotificationManagerCompat
+                    .from(context)
+                    .notify(
+                        siteId.hashCode(),
+                        notification
+                    )
+            }
+        }
+
+        private fun createNotificationChannel(
+            context: Context
+        ) {
+
+            val soundUri = arrivalSoundUri(context)
+
+            val audioAttributes =
+                AudioAttributes.Builder()
+                    .setUsage(
+                        AudioAttributes.USAGE_NOTIFICATION
+                    )
+                    .setContentType(
+                        AudioAttributes.CONTENT_TYPE_SONIFICATION
+                    )
+                    .build()
+
+            val channel =
+                NotificationChannel(
+                    CHANNEL_ID,
+                    "Site Arrivals",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+
+                    description =
+                        "Notifies you when you arrive at a historical site"
+
+                    setSound(
+                        soundUri,
+                        audioAttributes
+                    )
+
+                    enableVibration(true)
+                }
+
+            val notificationManager =
+                context.getSystemService(
+                    NotificationManager::class.java
+                )
+
+            // The v2 channel saved its sound by numeric resource ID, which can
+            // change between builds. Channel sounds can't be edited after
+            // creation, so it's replaced by v3 rather than updated.
+            notificationManager.deleteNotificationChannel(
+                LEGACY_CHANNEL_ID
+            )
+
+            notificationManager.createNotificationChannel(
+                channel
+            )
+        }
+
+        // By resource name, not R.raw's numeric ID: the system stores this URI
+        // with the channel, and numeric IDs aren't stable across app updates.
+        private fun arrivalSoundUri(context: Context) =
+            "android.resource://${context.packageName}/raw/arrival_chime"
+                .toUri()
     }
 }

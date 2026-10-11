@@ -42,6 +42,13 @@ object ActiveItineraryTrip {
     private var stops: List<ItineraryStop> = emptyList()
     private var currentIndex: Int = 0
 
+    /**
+     * The trip's travel mode as saved ("WALK", "DRIVE", ...), so every stop's
+     * directions use it instead of always opening in Walking.
+     */
+    var travelModeWire: String = "WALK"
+        private set
+
     // Out-of-order-arrival bookkeeping. See [noteArrival] — dwell geofences
     // fire once per stay, but the Arrival screen itself can still be
     // re-entered (back-and-forth navigation, a cold-launch rehydrate) while
@@ -56,8 +63,10 @@ object ActiveItineraryTrip {
         documentId: String,
         name: String,
         orderedStops: List<ItineraryStop>,
-        startedAtMillis: Long
+        startedAtMillis: Long,
+        travelModeWire: String = "WALK"
     ): ItineraryStop? {
+        this.travelModeWire = travelModeWire.ifBlank { "WALK" }
         stops = orderedStops.sortedBy { it.order }
         itineraryName = name.ifBlank { "My Intramuros Trip" }
         itineraryDocumentId = documentId
@@ -87,7 +96,8 @@ object ActiveItineraryTrip {
             documentId = active.documentId,
             name = active.name,
             orderedStops = active.stops,
-            startedAtMillis = timestampMillis(active.startedAt) ?: System.currentTimeMillis()
+            startedAtMillis = timestampMillis(active.startedAt) ?: System.currentTimeMillis(),
+            travelModeWire = active.travelMode
         )
 
         return true
@@ -214,6 +224,7 @@ object ActiveItineraryTrip {
         startedAtMillis = 0L
         stops = emptyList()
         currentIndex = 0
+        travelModeWire = "WALK"
         lastArrivalRefId = null
         dismissedOutOfOrderRefId = null
     }

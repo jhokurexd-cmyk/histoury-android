@@ -111,10 +111,13 @@ class MapOverviewViewModel(application: Application) : AndroidViewModel(applicat
         _siteResults.value = if (query.isBlank()) {
             emptyList()
         } else {
-            _allSites.value.filter { site ->
-                site.siteName.contains(query, ignoreCase = true) ||
-                    site.location.contains(query, ignoreCase = true)
-            }
+            // Same word-start matching and ordering as Home's search.
+            com.histoury.app.util.SearchMatcher.rank(
+                items = _allSites.value,
+                query = query,
+                name = { it.siteName },
+                location = { it.location }
+            )
         }
 
         // Generic places are debounced so we don't geocode every keystroke.

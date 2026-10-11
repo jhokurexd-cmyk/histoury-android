@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Info
 import com.histoury.app.ui.screens.legal.LegalContent
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -387,6 +388,14 @@ fun MenuScreen(
                     label = "Terms & Conditions",
                     onClick = {
                         navController.navigateSafely(Routes.Legal.createRoute(LegalContent.TYPE_TERMS))
+                    }
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = DividerColor, thickness = 0.5.dp)
+                MenuItemRow(
+                    icon = Icons.Default.Info,
+                    label = "Legal Notices & Credits",
+                    onClick = {
+                        navController.navigateSafely(Routes.Legal.createRoute(LegalContent.TYPE_NOTICES))
                     }
                 )
             }

@@ -277,7 +277,8 @@ fun RankingsScreen(
                 state = reviewsState,
                 onToggleHelpful = { review -> rankingsViewModel.reviews.toggleHelpful(review) },
                 onReport = { review -> rankingsViewModel.reviews.openReport(review) },
-                onSortChange = { sort -> rankingsViewModel.reviews.setSort(sort) }
+                onSortChange = { sort -> rankingsViewModel.reviews.setSort(sort) },
+                onStarFilter = { star -> rankingsViewModel.reviews.setStarFilter(star) }
             )
         }
     }
@@ -528,7 +529,8 @@ private fun SiteReviewsSheetContent(
     state: com.histoury.app.data.reviews.SiteReviewsState,
     onToggleHelpful: (Review) -> Unit,
     onReport: (Review) -> Unit,
-    onSortChange: (com.histoury.app.data.reviews.ReviewSort) -> Unit
+    onSortChange: (com.histoury.app.data.reviews.ReviewSort) -> Unit,
+    onStarFilter: (Int?) -> Unit = {}
 ) {
 
     SiteReviewsList(
@@ -553,7 +555,36 @@ private fun SiteReviewsSheetContent(
 
                 Spacer(Modifier.height(16.dp))
 
-                ReviewSummaryCard(site = site, reviews = state.reviews)
+                ReviewSummaryCard(
+                    site = site,
+                    reviews = state.reviews,
+                    selectedStar = state.starFilter,
+                    // Tap a row for only those reviews; tap it again for all.
+                    onStarClick = { star -> onStarFilter(if (state.starFilter == star) null else star) }
+                )
+
+                state.starFilter?.let { star ->
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Showing $star-star reviews (${state.displayedReviews.size})",
+                            fontSize = 12.5.sp,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = "Show all",
+                            fontSize = 12.5.sp,
+                            color = Primary,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .clickable { onStarFilter(null) }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                }
 
                 Spacer(Modifier.height(16.dp))
 

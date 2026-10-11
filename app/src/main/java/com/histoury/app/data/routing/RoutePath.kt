@@ -32,7 +32,14 @@ data class RouteLeg(
     /** True when the leg ends at a verified visitor entrance rather than the site's centre point. */
     val endsAtVerifiedEntrance: Boolean = false,
 
-    val warnings: List<String> = emptyList()
+    val warnings: List<String> = emptyList(),
+
+    /**
+     * Commute legs only: the walk / ride steps (which jeepney, bus or train,
+     * where to get on and off), so the itinerary can show step-by-step
+     * directions between stops and draw each ride in its route's colour.
+     */
+    val steps: List<com.histoury.app.data.repository.RouteStep> = emptyList()
 ) {
 
     val durationMinutes: Int

@@ -114,7 +114,7 @@ data class Itinerary(
 
     val totalVisitMinutes: Int = 0,
 
-    // "WALK" / "DRIVE" / "TWO_WHEELER" — matches TravelMode.wireValue so the
+    // "WALK" / "DRIVE" / "TWO_WHEELER" / "TRANSIT" — matches TravelMode.wireValue so the
     // saved route redraws in the mode it was planned for. Older documents
     // without the field fall back to walking.
     val travelMode: String = "WALK",

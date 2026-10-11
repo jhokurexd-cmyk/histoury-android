@@ -84,18 +84,18 @@ class HomeViewModel : ViewModel() {
         _selectedTagIds
     ) { sites, query, selectedTagIds ->
 
-        sites.filter { site ->
-
-            val matchesQuery = query.isBlank() ||
-                site.siteName.contains(query, ignoreCase = true) ||
-                site.location.contains(query, ignoreCase = true) ||
-                site.description.contains(query, ignoreCase = true)
-
-            val matchesTags = selectedTagIds.isEmpty() ||
-                site.tagIds.any { tagId -> tagId in selectedTagIds }
-
-            matchesQuery && matchesTags
+        val tagged = sites.filter { site ->
+            selectedTagIds.isEmpty() || site.tagIds.any { tagId -> tagId in selectedTagIds }
         }
+
+        // Word-start matching, best match first (see SearchMatcher).
+        com.histoury.app.util.SearchMatcher.rank(
+            items = tagged,
+            query = query,
+            name = { it.siteName },
+            location = { it.location },
+            description = { it.description }
+        )
 
     }.stateIn(
         scope = viewModelScope,
@@ -109,12 +109,7 @@ class HomeViewModel : ViewModel() {
         _selectedPlaceCategory
     ) { places, query, category ->
 
-        places.filter { place ->
-
-            val matchesQuery = query.isBlank() ||
-                place.name.contains(query, ignoreCase = true) ||
-                place.location.contains(query, ignoreCase = true) ||
-                place.description.contains(query, ignoreCase = true)
+        val inCategory = places.filter { place ->
 
             val matchesCategory = when (category) {
                 "all" -> true
@@ -129,8 +124,16 @@ class HomeViewModel : ViewModel() {
                 else -> place.category.equals(category, ignoreCase = true)
             }
 
-            matchesQuery && matchesCategory
+            matchesCategory
         }
+
+        com.histoury.app.util.SearchMatcher.rank(
+            items = inCategory,
+            query = query,
+            name = { it.name },
+            location = { it.location },
+            description = { it.description }
+        )
 
     }.stateIn(
         scope = viewModelScope,

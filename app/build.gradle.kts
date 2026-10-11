@@ -18,6 +18,33 @@ val arCoreApiKey = localProperties.getProperty("ARCORE_API_KEY")
     ?: providers.environmentVariable("ARCORE_API_KEY").orNull
     ?: ""
 
+// ----- Map configuration (see MAPLIBRE_MIGRATION.md) -----------------------
+// Read like ARCORE_API_KEY: local.properties, then Gradle properties, then
+// environment variables, then the default. None of these are secrets
+// (OpenFreeMap needs no key); a provider that does need one should put it
+// in local.properties, which is never committed.
+fun mapSetting(name: String, default: String): String =
+    localProperties.getProperty(name)
+        ?: providers.gradleProperty(name).orNull
+        ?: providers.environmentVariable(name).orNull
+        ?: default
+
+// "maplibre" (OpenStreetMap map, the default) or "google" (the previous
+// Google Maps renderer, kept until MapLibre is signed off on devices).
+val histouryMapRenderer = mapSetting("HISTOURY_MAP_RENDERER", "maplibre")
+
+// OpenFreeMap: free, no API key, commercial use allowed, but no SLA. For the
+// Play Store release, point these at a provider with an SLA or at self-hosted
+// tiles (see MAPLIBRE_MIGRATION.md, "Before a public release").
+val histouryMapStyleLight = mapSetting("HISTOURY_MAP_STYLE_LIGHT", "https://tiles.openfreemap.org/styles/liberty")
+val histouryMapStyleDark = mapSetting("HISTOURY_MAP_STYLE_DARK", "https://tiles.openfreemap.org/styles/dark")
+val histouryMapAttribution = mapSetting(
+    "HISTOURY_MAP_ATTRIBUTION",
+    "\u00a9 OpenFreeMap \u00a9 OpenMapTiles \u00a9 OpenStreetMap contributors"
+)
+
+fun quoted(value: String) = "\"" + value.replace("\"", "\\\"") + "\""
+
 android {
     namespace = "com.histoury.app"
 
@@ -42,6 +69,11 @@ android {
         // Supply this as ARCORE_API_KEY in ignored local.properties, user
         // Gradle properties, or the environment. Do not commit the key.
         manifestPlaceholders["ARCORE_API_KEY"] = arCoreApiKey
+
+        buildConfigField("String", "HISTOURY_MAP_RENDERER", quoted(histouryMapRenderer))
+        buildConfigField("String", "HISTOURY_MAP_STYLE_LIGHT", quoted(histouryMapStyleLight))
+        buildConfigField("String", "HISTOURY_MAP_STYLE_DARK", quoted(histouryMapStyleDark))
+        buildConfigField("String", "HISTOURY_MAP_ATTRIBUTION", quoted(histouryMapAttribution))
     }
 
     buildTypes {
@@ -71,6 +103,17 @@ android {
 
     buildFeatures {
         compose = true
+        // MapConfig reads the map settings above from BuildConfig.
+        buildConfig = true
+    }
+
+    packaging {
+        jniLibs {
+            // MapLibre and SceneView/Filament both ship native code. If both
+            // ever bundle the shared C++ runtime, keep one copy instead of
+            // failing the build.
+            pickFirsts += "**/libc++_shared.so"
+        }
     }
 }
 
@@ -122,6 +165,15 @@ dependencies {
     implementation("com.google.android.gms:play-services-maps:19.2.0")
 
     implementation("com.google.android.gms:play-services-location:21.2.0")
+
+    // MapLibre Native: the open-source map renderer for OpenStreetMap-based
+    // vector tiles (MapConfig picks it by default). The OpenGL ES build, not
+    // the default artifact: since 13.0 `android-sdk` renders with Vulkan,
+    // whose drivers are still patchy on older Android 8-10 phones. 13.6.1 is
+    // the current stable release; minSdk 23, so it fits our minSdk 26.
+    // The Google Maps SDK above stays until MapLibre is signed off on devices
+    // (and LatLng from it is still used as a plain model class).
+    implementation("org.maplibre.gl:android-sdk-opengl:13.6.1")
 
     // Filament-backed 3D/AR renderer with a Compose ARScene, so the AR
     // screen is an ordinary NavHost destination instead of a separate

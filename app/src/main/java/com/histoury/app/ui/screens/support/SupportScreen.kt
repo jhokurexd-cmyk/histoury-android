@@ -25,6 +25,13 @@ import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Info
+import com.histoury.app.navigation.Routes
+import com.histoury.app.navigation.navigateSafely
+import com.histoury.app.ui.screens.legal.LegalContact
+import com.histoury.app.ui.screens.legal.LegalContent
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -71,79 +78,192 @@ private data class QuickHelpItem(
     val answer: String
 )
 
+private data class QuickHelpGroup(
+    val title: String,
+    val items: List<QuickHelpItem>
+)
+
 // Kept in step with the app as it is now. When a feature changes, update
 // the answer here too: an FAQ describing a button that no longer exists is
-// worse than no FAQ.
-private val quickHelpItems = listOf(
-    QuickHelpItem(
-        title = "How do I plan an itinerary?",
-        subtitle = "Build a route around the sites you want",
-        answer = "Tap the centre button in the bottom bar, then +. Pick your " +
-            "historical sites, choose interests for nearby recommendations " +
-            "(optional), and Histoury builds a walking route. Back takes you " +
-            "one step at a time without losing your picks."
+// worse than no FAQ. Privacy answers must agree with LegalContent.
+private val quickHelpGroups = listOf(
+    QuickHelpGroup(
+        title = "Trips & navigation",
+        items = listOf(
+            QuickHelpItem(
+                title = "How do I plan an itinerary?",
+                subtitle = "Build a route around the sites you want",
+                answer = "Tap the centre button in the bottom bar, then +. Pick your " +
+                    "historical sites (search or sort them by Nearest or A\u2013Z), " +
+                    "choose interests if you like, then add places: suggestions near " +
+                    "your sites come first, and every other place is listed below them. " +
+                    "Tap Generate Optimized Route and Histoury puts your stops in order."
+            ),
+            QuickHelpItem(
+                title = "Can I change my trip?",
+                subtitle = "Reorder, add or remove stops, change travel mode",
+                answer = "On the route screen, press and hold a stop (or drag its handle) " +
+                    "to move it, or tap its remove button. Add a Stop lets you search " +
+                    "and filter sites and places by type. Switch between Walk, Drive, " +
+                    "Ride and Commute at the top; for Drive you can avoid expressways " +
+                    "and tolls. Save the itinerary to keep your edits."
+            ),
+            QuickHelpItem(
+                title = "How do I get to Intramuros from where I am?",
+                subtitle = "The \"Getting there\" card",
+                answer = "If you're not near your first stop yet, the route screen shows " +
+                    "Getting there: the way from your current location to stop 1 in " +
+                    "your travel mode. In Commute, tap it for the step-by-step rides."
+            ),
+            QuickHelpItem(
+                title = "How does Commute work?",
+                subtitle = "Trains, buses and jeepneys",
+                answer = "Commute uses train, bus and jeepney routes mapped in " +
+                    "OpenStreetMap. Tap the commute line on a stop (or Steps while " +
+                    "navigating) to see each walk and ride: which line, which way, " +
+                    "where to get on and off. Times are estimates, not schedules, and " +
+                    "fares aren't shown. When walking is quicker, Histoury says so. " +
+                    "Not every route is mapped yet."
+            ),
+            QuickHelpItem(
+                title = "How does navigation work?",
+                subtitle = "Turn-by-turn directions to each stop",
+                answer = "Tap Start Trip Now for directions to your first stop. The arrow " +
+                    "follows your phone's compass when walking and your direction of " +
+                    "travel in a vehicle. Tap the compass button to keep north at the " +
+                    "top. If you leave the app, navigation continues in a small " +
+                    "floating window. Please don't use the app while driving."
+            ),
+            QuickHelpItem(
+                title = "Why didn't the arrival screen open?",
+                subtitle = "Location and arrival detection",
+                answer = "Turn on location, and set Histoury's location permission to " +
+                    "\"Allow all the time\" so arrivals are noticed with your phone in " +
+                    "your pocket. With the app open, an arrival is detected within " +
+                    "seconds of being inside a site's area. Each site counts once every " +
+                    "30 minutes. If you're busy in AR, a review or your itinerary, you " +
+                    "get a notification instead of being taken away."
+            )
+        )
     ),
-    QuickHelpItem(
-        title = "Can I change the order of stops?",
-        subtitle = "Reorder, add or remove stops",
-        answer = "On the route screen, press and hold a stop (or drag its " +
-            "handle) to move it, or tap its remove button to drop it. " +
-            "Tap Save to keep your changes."
+    QuickHelpGroup(
+        title = "Sites, places & AR",
+        items = listOf(
+            QuickHelpItem(
+                title = "How do I find a site or place?",
+                subtitle = "Search, categories and filters",
+                answer = "Use the search bar on Home: it matches the start of words, so " +
+                    "\"fo\" finds Fort Santiago. Choose a category such as Food & " +
+                    "Drink or Parks, and open View all for search, category filters " +
+                    "and sorting by Nearest, A\u2013Z or Top rated."
+            ),
+            QuickHelpItem(
+                title = "Why is a site locked?",
+                subtitle = "Unlocking site information",
+                answer = "Full site stories unlock once you've visited the site in " +
+                    "person. After that you can reread them any time from Menu > " +
+                    "Site Information."
+            ),
+            QuickHelpItem(
+                title = "How do I use the AR experience?",
+                subtitle = "See the site as it once was",
+                answer = "At the site, tap \"Travel Back in Time (AR)\" on the site's " +
+                    "page \u2014 it also appears when you open the site from Site " +
+                    "Information while you're there. Slowly point your camera at the " +
+                    "site until the model appears. Good daylight and a clear view help."
+            ),
+            QuickHelpItem(
+                title = "Can the narration keep playing?",
+                subtitle = "Listening with the screen off",
+                answer = "Yes. Narration keeps playing if you go Home or lock your phone, " +
+                    "with Pause and Stop in the notification. It pauses for calls and " +
+                    "when headphones are unplugged. In AR, closing the info panel stops it."
+            ),
+            QuickHelpItem(
+                title = "Can I book a hotel in Histoury?",
+                subtitle = "\"Book or check rates\"",
+                answer = "Histoury doesn't take bookings or payments. \"Book or check " +
+                    "rates\" opens the hotel's own booking page; any booking is between " +
+                    "you and the hotel. You can also call or message them from the " +
+                    "hotel's page."
+            ),
+            QuickHelpItem(
+                title = "Can I use Histoury offline?",
+                subtitle = "Downloads for weak signal",
+                answer = "Go to Menu > Offline Downloads and download a site before you " +
+                    "go. Its AR model and narration are then saved on your phone. Maps, " +
+                    "directions and reviews still need a connection."
+            )
+        )
     ),
-    QuickHelpItem(
-        title = "How does navigation work?",
-        subtitle = "Turn-by-turn directions to each stop",
-        answer = "Tap \"Start Trip Now\" to get directions to your first stop. When " +
-            "you arrive, Histoury opens that site automatically. If you leave " +
-            "the app mid-trip the map keeps going in a small floating window."
+    QuickHelpGroup(
+        title = "Reviews & photos",
+        items = listOf(
+            QuickHelpItem(
+                title = "How do I leave or read reviews?",
+                subtitle = "Reviews, filters, helpful votes and reports",
+                answer = "After visiting a site, open Visit History and tap Leave a " +
+                    "review. In Site Rankings, open Reviews to sort them, tap a star " +
+                    "row (for example 1 \u2605) to see only those, mark reviews " +
+                    "helpful, or report ones that break the rules."
+            ),
+            QuickHelpItem(
+                title = "Why was my review blocked or removed?",
+                subtitle = "Review rules",
+                answer = "Reviews are checked automatically for profanity, links and " +
+                    "contact details. Reviews that other visitors report are checked " +
+                    "by moderators and removed if they break the Terms."
+            ),
+            QuickHelpItem(
+                title = "Where are my photos?",
+                subtitle = "Gallery and saving to your phone",
+                answer = "AR photos appear in the Gallery tab. They're kept only on this " +
+                    "phone, in Histoury, separately for each account. Tap Save to " +
+                    "device on a photo to copy it to your phone's Pictures/Histoury " +
+                    "folder \u2014 photos you don't save are lost if you uninstall the app."
+            )
+        )
     ),
-    QuickHelpItem(
-        title = "Why is a site locked?",
-        subtitle = "Unlocking site information and AR",
-        answer = "Full site stories and the AR experience unlock once you've " +
-            "visited the site in person. After that, you can reread them any " +
-            "time from Menu > Site Information."
-    ),
-    QuickHelpItem(
-        title = "How do I use the AR experience?",
-        subtitle = "See the site as it once was",
-        answer = "At the site, tap \"Travel Back in Time (AR)\" and slowly " +
-            "point your camera at the site until the model appears. Good " +
-            "daylight and a clear view help it lock on."
-    ),
-    QuickHelpItem(
-        title = "Can I use Histoury offline?",
-        subtitle = "Downloads for weak signal",
-        answer = "Go to Menu > Offline Downloads and download a site before " +
-            "you go. Its AR model and narration are then saved on your phone. " +
-            "Maps, directions and reviews still need a connection."
-    ),
-    QuickHelpItem(
-        title = "Where are my photos?",
-        subtitle = "Gallery and saving to your phone",
-        answer = "Photos you take in AR appear in the Gallery tab. Tap " +
-            "Download on a photo to save a copy to your phone's Pictures/" +
-            "Histoury folder."
-    ),
-    QuickHelpItem(
-        title = "How do I leave or rate reviews?",
-        subtitle = "Reviews, helpful votes and reports",
-        answer = "After visiting a site, open Visit History and tap \"Leave a " +
-            "Review\". In Site Rankings you can mark reviews as helpful or " +
-            "report ones that break the rules."
-    ),
-    QuickHelpItem(
-        title = "Navigation or arrival not working?",
-        subtitle = "Check location settings",
-        answer = "Turn on GPS and set Histoury's location permission to " +
-            "\"Allow all the time\" so arrivals are detected while your phone " +
-            "is in your pocket. Allow notifications too."
-    ),
-    QuickHelpItem(
-        title = "Can I use dark mode?",
-        subtitle = "Change how Histoury looks",
-        answer = "Yes. Go to Menu > Appearance and choose Light, Dark or " +
-            "your phone's setting."
+    QuickHelpGroup(
+        title = "Account & privacy",
+        items = listOf(
+            QuickHelpItem(
+                title = "How do I change my details?",
+                subtitle = "Name, email, password and photo",
+                answer = "Go to Menu > View Profile to edit your name and photo, change " +
+                    "your email, or update your password."
+            ),
+            QuickHelpItem(
+                title = "How do I delete my account or get my data?",
+                subtitle = "Your rights under the Data Privacy Act",
+                answer = "Tap \"Privacy & data requests\" below to email our Data " +
+                    "Protection Officer. You can ask for a copy of your data, a " +
+                    "correction, or to delete your account. Deleting removes your " +
+                    "sign-in, profile, reviews, visit history, itineraries and favorites. " +
+                    "We may ask you to confirm it's you."
+            ),
+            QuickHelpItem(
+                title = "My account was suspended. What can I do?",
+                subtitle = "Suspensions and appeals",
+                answer = "When you sign in, Histoury shows the reason for the suspension " +
+                    "and lets you send an appeal, which an administrator reviews."
+            ),
+            QuickHelpItem(
+                title = "Why does Histoury ask for permissions?",
+                subtitle = "Location, camera and notifications",
+                answer = "Location shows where you are, gives directions and detects " +
+                    "arrivals (\"all the time\" only for arrivals with the app closed). " +
+                    "Camera is used only for AR. Notifications are for arrivals, " +
+                    "navigation and narration. You can turn any of them off in your " +
+                    "phone's settings; only the features that need them stop working."
+            ),
+            QuickHelpItem(
+                title = "Can I use dark mode?",
+                subtitle = "Change how Histoury looks",
+                answer = "Yes. Go to Menu > Appearance and choose Light, Dark or your " +
+                    "phone's setting."
+            )
+        )
     )
 )
 
@@ -216,7 +336,7 @@ fun SupportScreen(
                 Column {
 
                     Text(
-                        text = "Support & Feedback",
+                        text = "Support Center",
                         color = TextPrimary,
                         fontSize = 19.sp,
                         fontWeight = FontWeight.Bold
@@ -255,9 +375,19 @@ fun SupportScreen(
                     color = TextPrimary
                 )
 
+                quickHelpGroups.forEach { group ->
+
                 Spacer(Modifier.height(12.dp))
 
-                quickHelpItems.forEach { item ->
+                Text(
+                    text = group.title,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Primary,
+                    modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
+                )
+
+                group.items.forEach { item ->
 
                     val isExpanded = expandedItem == item.title
 
@@ -324,6 +454,7 @@ fun SupportScreen(
                             }
                         }
                     }
+                }
                 }
             }
 
@@ -510,12 +641,12 @@ fun SupportScreen(
                 ContactRow(
                     icon = Icons.Default.Email,
                     label = "Email",
-                    value = SUPPORT_EMAIL,
+                    value = LegalContact.SUPPORT_EMAIL,
                     onClick = {
                         try {
                             context.startActivity(
                                 Intent(Intent.ACTION_SENDTO).apply {
-                                    data = Uri.parse("mailto:$SUPPORT_EMAIL")
+                                    data = Uri.parse("mailto:${LegalContact.SUPPORT_EMAIL}")
                                     putExtra(Intent.EXTRA_SUBJECT, "Histoury Support")
                                 }
                             )
@@ -530,12 +661,12 @@ fun SupportScreen(
                 ContactRow(
                     icon = Icons.Default.Phone,
                     label = "Phone",
-                    value = SUPPORT_PHONE,
+                    value = LegalContact.SUPPORT_PHONE,
                     onClick = {
                         try {
                             context.startActivity(
                                 Intent(Intent.ACTION_DIAL).apply {
-                                    data = Uri.parse("tel:$SUPPORT_PHONE")
+                                    data = Uri.parse("tel:${LegalContact.SUPPORT_PHONE}")
                                 }
                             )
                         } catch (e: Exception) {
@@ -545,15 +676,91 @@ fun SupportScreen(
                 )
             }
 
+            // ----- Privacy & legal -----
+            // Where a visitor exercises their Data Privacy Act rights (access,
+            // correction, erasure, portability) and finds the documents.
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadow(elevation = 3.dp, shape = RoundedCornerShape(22.dp))
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(CardSurface)
+                    .padding(16.dp)
+            ) {
+
+                Text(
+                    text = "Privacy & Legal",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                ContactRow(
+                    icon = Icons.Default.Shield,
+                    label = "Privacy & data requests",
+                    value = "Get a copy, correct or delete your data",
+                    onClick = {
+                        try {
+                            context.startActivity(
+                                Intent(Intent.ACTION_SENDTO).apply {
+                                    data = Uri.parse("mailto:${LegalContact.DPO_EMAIL}")
+                                    putExtra(Intent.EXTRA_SUBJECT, LegalContact.PRIVACY_REQUEST_SUBJECT)
+                                    putExtra(
+                                        Intent.EXTRA_TEXT,
+                                        "Request (access / correction / deletion / copy of my data):\n\n" +
+                                            "Account email:\n\nDetails:\n"
+                                    )
+                                }
+                            )
+                        } catch (e: Exception) {
+                            // No email app: the address is in the Privacy Policy.
+                        }
+                    }
+                )
+
+                Spacer(Modifier.height(10.dp))
+
+                ContactRow(
+                    icon = Icons.Default.Shield,
+                    label = "Privacy Policy",
+                    value = "How your information is handled",
+                    onClick = {
+                        navController.navigateSafely(Routes.Legal.createRoute(LegalContent.TYPE_PRIVACY))
+                    }
+                )
+
+                Spacer(Modifier.height(10.dp))
+
+                ContactRow(
+                    icon = Icons.Default.Description,
+                    label = "Terms & Conditions",
+                    value = "Rules for using Histoury",
+                    onClick = {
+                        navController.navigateSafely(Routes.Legal.createRoute(LegalContent.TYPE_TERMS))
+                    }
+                )
+
+                Spacer(Modifier.height(10.dp))
+
+                ContactRow(
+                    icon = Icons.Default.Info,
+                    label = "Legal Notices & Credits",
+                    value = "Map data, licences and attributions",
+                    onClick = {
+                        navController.navigateSafely(Routes.Legal.createRoute(LegalContent.TYPE_NOTICES))
+                    }
+                )
+            }
+
             Spacer(Modifier.height(8.dp))
         }
     }
 }
 
-// Shown on the Contact Us card and referenced by the Privacy Policy's
-// "contact via the Support & Feedback section". Swap in real values here.
-private const val SUPPORT_EMAIL = "support@histoury.com"
-private const val SUPPORT_PHONE = "+63 912 345 678"
+// Contact details live in LegalContact (shared with the legal documents).
 
 @Composable
 private fun ContactRow(

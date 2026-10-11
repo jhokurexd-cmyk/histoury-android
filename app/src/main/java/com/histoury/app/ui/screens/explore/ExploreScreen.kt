@@ -871,7 +871,8 @@ internal fun WizardStepHeader(
             .fillMaxWidth()
             .background(SurfaceSoft)
             .padding(horizontal = 20.dp)
-            .padding(top = 20.dp, bottom = 16.dp)
+            // Compact: on the builder steps the list below needs the room.
+            .padding(top = 12.dp, bottom = 8.dp)
     ) {
 
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -908,8 +909,10 @@ internal fun WizardStepHeader(
                 )
                 Text(
                     text = subtitle,
-                    fontSize = 12.5.sp,
-                    color = TextSecondary
+                    fontSize = 12.sp,
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
             }
 

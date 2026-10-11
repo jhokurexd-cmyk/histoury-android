@@ -1,1 +1,3 @@
 /build
+# Local backups made during migrations; not part of the app.
+/_backup_*/

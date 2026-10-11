@@ -15,9 +15,13 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.Hyphens
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
 import com.histoury.app.theme.CardSurface
 import androidx.compose.ui.text.font.FontStyle
@@ -569,14 +573,14 @@ fun SiteContentTabBody(
     // scrolling page reads as the page itself moving.
     AnimatedContent(
         targetState = selectedTab,
-        modifier = modifier,
+        modifier = modifier.fillMaxWidth(),
         transitionSpec = {
             fadeIn(tween(180, delayMillis = 60)) togetherWith fadeOut(tween(90))
         },
         label = "siteContentTab"
     ) { tab ->
 
-    Column {
+    Column(modifier = Modifier.fillMaxWidth()) {
 
         when (tab) {
 
@@ -668,7 +672,9 @@ private fun OverviewTabContent(
                     color = TextSecondary,
                     fontSize = 13.5.sp,
                     lineHeight = 20.sp,
-                    fontStyle = FontStyle.Italic
+                    fontStyle = FontStyle.Italic,
+                    style = LocalTextStyle.current.merge(JustifiedReading),
+                    modifier = Modifier.weight(1f)
                 )
             }
 
@@ -684,8 +690,19 @@ private fun OverviewTabContent(
             fontSize = 15.sp,
             lineHeight = 24.sp,
             maxLines = if (expanded) Int.MAX_VALUE else COLLAPSED_OVERVIEW_LINES,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.animateContentSize(animationSpec = tween(220))
+            // Clip, not Ellipsis. With an ellipsis, letter spacing and an
+            // alignment set, Compose adds an "indentation fix" span to the
+            // whole paragraph, and with justified text that span is what
+            // cut the lines ~20dp short of the right edge (the gap on the
+            // right). "Read more" already says there's more.
+            overflow = TextOverflow.Clip,
+            style = LocalTextStyle.current.merge(JustifiedReading),
+            // Full width, always. Left to size itself, justified text came
+            // out narrower than the quote box and buttons around it, leaving
+            // a wider gap on the right than on the left.
+            modifier = Modifier
+                .fillMaxWidth()
+                .animateContentSize(animationSpec = tween(220))
         )
 
         // Only offered when there is actually more to read. Showing it on a
@@ -739,6 +756,23 @@ private fun OverviewTabContent(
  * be used to decide whether the control is needed at all.
  */
 private const val COLLAPSED_OVERVIEW_LINES = 7
+
+/**
+ * Body text of the information boards: justified (straight left and right
+ * edges, like a printed museum panel). Hyphenation and paragraph-style line
+ * breaking stop justification from opening wide gaps between words on a
+ * narrow phone screen. The last line of each paragraph stays left-aligned.
+ */
+private val JustifiedReading = TextStyle(
+    textAlign = TextAlign.Justify,
+    // No extra letter spacing. The theme's body text adds 0.5sp between
+    // letters, and on justified lines Android didn't count that spacing
+    // when stretching the line, so every line stopped ~0.5sp x letters
+    // (about 20-25dp) short of the right edge.
+    letterSpacing = 0.sp,
+    hyphens = Hyphens.Auto,
+    lineBreak = LineBreak.Paragraph
+)
 private const val COLLAPSED_OVERVIEW_CHARS = 420
 
 @Composable
@@ -804,7 +838,9 @@ private fun TimelineTabContent(entries: List<TimelineEntry>) {
                         text = entry.event,
                         color = TextPrimary.copy(alpha = 0.86f),
                         fontSize = 14.5.sp,
-                        lineHeight = 22.sp
+                        lineHeight = 22.sp,
+                        style = LocalTextStyle.current.merge(JustifiedReading),
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             }
@@ -870,7 +906,9 @@ private fun StoriesTabContent(
                     text = entry.content,
                     color = TextPrimary.copy(alpha = 0.86f),
                     fontSize = 14.5.sp,
-                    lineHeight = 23.sp
+                    lineHeight = 23.sp,
+                    style = LocalTextStyle.current.merge(JustifiedReading),
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         }

@@ -3755,13 +3755,24 @@ private fun ArSiteInfoSheet(
 
     val context = LocalContext.current
 
-    // Scoped to the sheet, so closing it stops the narration. A voice
+    // Scoped to the sheet, so hiding it stops the narration. A voice
     // continuing over a live camera feed after the panel is gone would be
-    // baffling, and there is no visible control left to stop it.
-    val voiceover = rememberVoiceoverController()
+    // baffling, and there is no visible control left to stop it. (Pressing
+    // Home with the sheet open is different: the narration keeps playing,
+    // with its own notification, like on the Site Details page.)
+    val voiceover = rememberVoiceoverController(siteName = site.siteName)
+
+    // The X, swiping the sheet down, tapping the camera behind it and Back
+    // all come through here. Stopping first means the voice ends the moment
+    // the board starts to go, not after its slide-out animation. (Taking a
+    // photo closes the sheet directly; leaving the screen stops it too.)
+    val hideSheet = {
+        voiceover.stop()
+        onDismiss()
+    }
 
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
+        onDismissRequest = hideSheet,
         containerColor = Color.Transparent,
         scrimColor = Color.Black.copy(alpha = 0.18f),
         tonalElevation = 0.dp,
@@ -3842,7 +3853,7 @@ private fun ArSiteInfoSheet(
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            onClick = onDismiss
+                            onClick = hideSheet
                         ),
                     contentAlignment = Alignment.Center
                 ) {

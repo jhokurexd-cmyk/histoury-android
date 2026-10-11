@@ -60,6 +60,8 @@ import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.histoury.app.ui.components.rememberThemedMapProperties
+import com.histoury.app.map.MapConfig
+import com.histoury.app.ui.map.PlacePreviewMapLibre
 import androidx.compose.material.icons.filled.Map
 import com.histoury.app.data.model.Place
 import com.histoury.app.data.viewmodel.PlaceDetailsViewModel
@@ -388,6 +390,13 @@ fun PlaceDetailsScreen(
                             }
                         }
 
+                        // Hotels with a booking link: send the visitor to the
+                        // hotel's own booking page (Histoury takes no bookings).
+                        if (place.bookingUrl.isNotBlank()) {
+                            Spacer(Modifier.height(16.dp))
+                            com.histoury.app.ui.components.BookStayButton(place.bookingUrl)
+                        }
+
                         if (place.galleryImages.isNotEmpty()) {
 
                             SectionHeading("Gallery")
@@ -607,7 +616,14 @@ private fun PlaceMapPreview(
             .clip(RoundedCornerShape(16.dp))
             .background(SurfaceSoft)
     ) {
-        GoogleMap(
+        if (MapConfig.useMapLibre) {
+            PlacePreviewMapLibre(
+                position = position,
+                title = title,
+                onOpen = onOpen,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else GoogleMap(
             modifier = Modifier.fillMaxSize(),
             cameraPositionState = cameraPositionState,
             googleMapOptionsFactory = { GoogleMapOptions().liteMode(true) },

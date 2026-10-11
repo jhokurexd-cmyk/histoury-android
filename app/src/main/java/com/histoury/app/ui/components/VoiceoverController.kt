@@ -1,7 +1,12 @@
 package com.histoury.app.ui.components
 
+import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.MediaPlayer
+import android.os.PowerManager
+import com.histoury.app.audio.VoiceoverPlaybackService
 import android.util.Log
 import kotlinx.coroutines.launch
 import com.histoury.app.data.offline.OfflineStore
@@ -15,9 +20,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -34,9 +36,15 @@ import kotlinx.coroutines.withContext
  * over it.
  *
  * Built on MediaPlayer rather than pulling in Media3/ExoPlayer. The job is
- * streaming one short MP3 with no playlist, no seeking UI and no background
- * playback; ExoPlayer would add a couple of megabytes to the APK and a
- * service to manage for features this screen does not have.
+ * one short MP3 with no playlist; ExoPlayer would add a couple of megabytes
+ * to the APK for features this screen does not have.
+ *
+ * Keeps playing when the visitor leaves the app (Home, another app, screen
+ * off), like a music player: while narration is loaded,
+ * [VoiceoverPlaybackService] keeps Histoury in the foreground state and
+ * shows a media notification with Pause / Play and Stop. It also takes
+ * audio focus, so Spotify or YouTube pause while the narration speaks and
+ * the narration pauses for a phone call.
  */
 class VoiceoverController {
 
@@ -84,6 +92,25 @@ class VoiceoverController {
 
     internal var scope: CoroutineScope? = null
 
+    /** Application context, for audio focus and the playback notification. */
+    internal var appContext: Context? = null
+
+    /** The site being narrated, shown in the notification. */
+    var siteName: String = ""
+        internal set
+
+    /** Notification title for the loaded section. */
+    val sectionTitle: String
+        get() = when {
+            activeSection == "overview" -> "About this site"
+            activeSection?.startsWith("story_") == true -> "Story"
+            else -> "Narration"
+        }
+
+    /** True when a track is loaded (playing, paused or finished). */
+    val hasTrack: Boolean
+        get() = player != null && activeSection != null
+
     fun toggle(section: String, url: String) {
 
         val current = player
@@ -92,15 +119,7 @@ class VoiceoverController {
         // stays prepared and the position is kept, so resuming continues
         // mid-sentence rather than starting the download over.
         if (activeSection == section && current != null) {
-            runCatching {
-                if (current.isPlaying) {
-                    current.pause()
-                    isPlaying = false
-                } else {
-                    current.start()
-                    isPlaying = true
-                }
-            }
+            if (runCatching { current.isPlaying }.getOrDefault(false)) pause() else resume()
             return
         }
 
@@ -220,16 +239,11 @@ class VoiceoverController {
         val controller = this
         val media = MediaPlayer()
 
-        media.setAudioAttributes(
-            AudioAttributes.Builder()
-                // Spoken narration, not music. The distinction matters: the
-                // system ducks and routes speech differently, and on a device
-                // with a screen reader running it is what stops the two
-                // talking over each other.
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                .build()
-        )
+        media.setAudioAttributes(AUDIO_ATTRIBUTES)
+
+        // Keeps the CPU awake while it plays with the screen off (matters
+        // for the streaming fallback; local files would mostly cope anyway).
+        appContext?.let { runCatching { media.setWakeMode(it, PowerManager.PARTIAL_WAKE_LOCK) } }
 
         media.setOnPreparedListener { prepared ->
             // Superseded while preparing (stopped, or another section
@@ -243,7 +257,9 @@ class VoiceoverController {
             controller.isPlaying = true
             controller.durationMs = prepared.duration.coerceAtLeast(0)
             controller.positionMs = 0
+            controller.requestFocus()
             prepared.start()
+            controller.publish()
         }
 
         media.setOnCompletionListener {
@@ -253,6 +269,9 @@ class VoiceoverController {
             // paused one.
             controller.isPlaying = false
             controller.positionMs = controller.durationMs
+            // Finished: nothing left to control from outside the app.
+            controller.abandonFocus()
+            VoiceoverPlaybackService.stop(controller)
         }
 
         media.setOnErrorListener { failed, what, extra ->
@@ -266,6 +285,8 @@ class VoiceoverController {
             controller.isPlaying = false
             controller.error = "Couldn't play that narration."
             controller.release()
+            controller.abandonFocus()
+            VoiceoverPlaybackService.stop(controller)
             true
         }
 
@@ -288,6 +309,41 @@ class VoiceoverController {
         }
     }
 
+    /** Pauses in place (the notification's Pause, a call, unplugged headphones). */
+    fun pause() = pauseInternal(keepFocus = false)
+
+    /**
+     * [keepFocus] is for a brief interruption (a call): we keep our claim on
+     * audio focus so Android tells us when it's over and we can carry on.
+     */
+    private fun pauseInternal(keepFocus: Boolean) {
+        val active = player ?: return
+        resumeAfterFocusLoss = false
+        runCatching { if (active.isPlaying) active.pause() }
+        isPlaying = false
+        positionMs = runCatching { active.currentPosition }.getOrDefault(positionMs)
+        if (!keepFocus) abandonFocus()
+        publish()
+    }
+
+    /** Resumes a paused track, or restarts a finished one from the beginning. */
+    fun resume() {
+        val active = player ?: return
+        if (activeSection == null) return
+        requestFocus()
+        runCatching {
+            active.start()
+            isPlaying = true
+        }
+        publish()
+    }
+
+    /** Play/pause for the loaded track; does nothing when nothing is loaded. */
+    fun playPause() {
+        val active = player ?: return
+        if (runCatching { active.isPlaying }.getOrDefault(false)) pause() else resume()
+    }
+
     fun stop() {
         activeSection = null
         isPlaying = false
@@ -295,6 +351,63 @@ class VoiceoverController {
         positionMs = 0
         durationMs = 0
         release()
+        abandonFocus()
+        VoiceoverPlaybackService.stop(this)
+    }
+
+    /** Tells the playback notification what's happening now. */
+    private fun publish() {
+        val context = appContext ?: return
+        if (hasTrack) VoiceoverPlaybackService.show(context, this)
+        else VoiceoverPlaybackService.stop(this)
+    }
+
+    // ------------------------------------------------------------ audio focus
+
+    private var focusRequest: AudioFocusRequest? = null
+
+    /** Set when a call or alarm paused us; we resume when it's over. */
+    private var resumeAfterFocusLoss = false
+
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        when (change) {
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                // Another app started playing (e.g. Spotify): stay paused.
+                pause()
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                // A call, a navigation prompt: pause, and pick up after.
+                // (Speech is paused rather than ducked: half-heard
+                // narration under another voice is useless.)
+                if (isPlaying) {
+                    pauseInternal(keepFocus = true)
+                    resumeAfterFocusLoss = true
+                }
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                if (resumeAfterFocusLoss) {
+                    resumeAfterFocusLoss = false
+                    resume()
+                }
+            }
+        }
+    }
+
+    internal fun requestFocus() {
+        val manager = appContext?.getSystemService(AudioManager::class.java) ?: return
+        val request = focusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(AUDIO_ATTRIBUTES)
+            .setWillPauseWhenDucked(true)
+            .setOnAudioFocusChangeListener(focusListener)
+            .build()
+            .also { focusRequest = it }
+        runCatching { manager.requestAudioFocus(request) }
+    }
+
+    internal fun abandonFocus() {
+        val manager = appContext?.getSystemService(AudioManager::class.java) ?: return
+        focusRequest?.let { request -> runCatching { manager.abandonAudioFocusRequest(request) } }
     }
 
     /**
@@ -340,30 +453,43 @@ class VoiceoverController {
     internal fun dispose() {
         stop()
     }
+
+    private companion object {
+        // Spoken narration, not music. The distinction matters: the system
+        // ducks and routes speech differently, and on a device with a screen
+        // reader running it is what stops the two talking over each other.
+        val AUDIO_ATTRIBUTES: AudioAttributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+    }
 }
 
 /**
- * A controller tied to the composable's lifetime and the screen's.
+ * A controller tied to the composable's lifetime.
  *
- * Both halves matter. Leaving the composition releases the player, so
- * navigating away stops the narration instead of leaving a disembodied
- * voice reading over the next screen. And pausing the app stops it too —
- * a visitor who locks their phone mid-sentence expects silence, and
- * MediaPlayer will happily keep playing otherwise.
+ * Leaving the composition (going back from the screen, closing the AR info
+ * sheet) stops the narration, so a voice never carries on over a screen
+ * that has nothing to do with it. Leaving the APP does not: pressing Home,
+ * switching apps or locking the phone keeps it playing, with a media
+ * notification to pause or stop it — the screen is still there underneath,
+ * just not visible.
+ *
+ * [siteName] is shown in that notification.
  */
 @Composable
-fun rememberVoiceoverController(): VoiceoverController {
+fun rememberVoiceoverController(siteName: String = ""): VoiceoverController {
 
     val controller = remember { VoiceoverController() }
-    val lifecycleOwner = LocalLifecycleOwner.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     // Handed in rather than looked up inside the controller, so the
-    // controller stays a plain class with no Android context of its own —
-    // which is what keeps it testable and free of leak risk.
+    // controller stays a plain class — which keeps it testable.
     controller.audioDir = remember(context) { OfflineStore.audioDir(context) }
+    controller.appContext = context.applicationContext
     controller.scope = scope
+    controller.siteName = siteName
 
     // Only runs while something is actually playing: keying the effect on
     // the playing section means the timer starts and stops itself rather
@@ -375,20 +501,8 @@ fun rememberVoiceoverController(): VoiceoverController {
         }
     }
 
-    DisposableEffect(lifecycleOwner) {
-
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE) {
-                controller.stop()
-            }
-        }
-
-        lifecycleOwner.lifecycle.addObserver(observer)
-
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            controller.dispose()
-        }
+    DisposableEffect(controller) {
+        onDispose { controller.dispose() }
     }
 
     return controller

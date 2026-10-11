@@ -67,6 +67,8 @@ import com.google.maps.android.compose.MapUiSettings
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.histoury.app.ui.components.rememberThemedMapColorScheme
 import com.histoury.app.ui.components.rememberThemedMapProperties
+import com.histoury.app.map.MapConfig
+import com.histoury.app.ui.map.OverviewMapLibre
 import com.histoury.app.data.viewmodel.MapOverviewViewModel
 import com.histoury.app.navigation.Routes
 import com.histoury.app.theme.Primary
@@ -166,6 +168,8 @@ fun MapOverviewScreen(
     LaunchedEffect(cameraTarget) {
 
         val target = cameraTarget ?: return@LaunchedEffect
+        // The MapLibre map moves its own camera (OverviewMapLibre).
+        if (MapConfig.useMapLibre) return@LaunchedEffect
 
         try {
             cameraPositionState.animate(
@@ -215,7 +219,21 @@ fun MapOverviewScreen(
                 .padding(padding)
         ) {
 
-            GoogleMap(
+            if (MapConfig.useMapLibre) {
+                OverviewMapLibre(
+                    sites = sites,
+                    cameraTarget = cameraTarget,
+                    showUserLocation = hasLocationPermission,
+                    topInsetDp = 74f,
+                    bottomInsetDp = BottomNavBarInset.value,
+                    // A tap opens the site card below (no callout).
+                    onSiteClick = { site -> mapOverviewViewModel.selectSite(site) },
+                    // Tapping empty map dismisses the site card.
+                    onMapClick = { mapOverviewViewModel.selectSite(null) },
+                    onMapLoaded = { mapLoaded = true },
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else GoogleMap(
                 modifier = Modifier.fillMaxSize(),
                 cameraPositionState = cameraPositionState,
                 onMapLoaded = { mapLoaded = true },

@@ -32,6 +32,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material.icons.filled.NearMe
+import com.histoury.app.theme.PrimarySoft
+import com.histoury.app.util.UserDistance
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,6 +89,27 @@ fun SelectSitesStep(
 
     val uiState by viewModel.uiState.collectAsState()
 
+    // Search + sort (nearest first by default), kept across rotation and
+    // opening a site's details.
+    val context = LocalContext.current
+    val userPosition by UserDistance.position.collectAsState()
+    LaunchedEffect(Unit) { UserDistance.refresh(context) }
+    var siteQuery by rememberSaveable { mutableStateOf("") }
+    var siteSort by rememberSaveable { mutableStateOf(BuilderSort.NEAREST) }
+    val shownSites = remember(uiState.allSites, siteQuery, siteSort, userPosition) {
+        builderFilterAndSort(
+            items = uiState.allSites,
+            query = siteQuery,
+            sort = siteSort,
+            from = userPosition,
+            name = { it.siteName },
+            latitude = { it.latitude },
+            longitude = { it.longitude },
+            location = { it.location },
+            description = { it.description }
+        )
+    }
+
     TutorialTour(
         id = "builder_sites",
         enabled = !uiState.isLoadingCatalog,
@@ -118,7 +147,7 @@ fun SelectSitesStep(
 
             WizardStepHeader(
                 title = "Select Historical Sites",
-                subtitle = "Tap a site to see its details \u2022 tap the circle to pick it",
+                subtitle = "Tap for details \u2022 circle to pick",
                 stepLabel = "1 / 3",
                 onBackClick = onClose
             )
@@ -132,6 +161,16 @@ fun SelectSitesStep(
                 }
             } else {
 
+                BuilderListControls(
+                    query = siteQuery,
+                    onQueryChange = { siteQuery = it },
+                    placeholder = "Search historical sites...",
+                    sort = siteSort,
+                    onSortChange = { siteSort = it },
+                    hasLocation = userPosition != null,
+                    resultCount = shownSites.size
+                )
+
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
                     modifier = Modifier.weight(1f),
@@ -140,13 +179,14 @@ fun SelectSitesStep(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
 
-                    items(uiState.allSites) { site ->
+                    items(shownSites) { site ->
 
                         val isSelected = site.documentId in uiState.selectedSiteIds
 
                         SelectableCard(
                             title = site.siteName,
                             subtitle = site.location,
+                            distance = UserDistance.labelFor(site.latitude, site.longitude, userPosition),
                             imageUrl = site.featuredImage,
                             isSelected = isSelected,
                             onToggleSelected = { viewModel.toggleSiteSelected(site.documentId) },
@@ -157,7 +197,7 @@ fun SelectSitesStep(
                                     mode = StopPreviewMode.SELECTION
                                 )
                             },
-                            tutorialKey = if (site.documentId == uiState.allSites.firstOrNull()?.documentId) {
+                            tutorialKey = if (site.documentId == shownSites.firstOrNull()?.documentId) {
                                 "builder_first_site"
                             } else {
                                 null
@@ -205,6 +245,8 @@ private fun SelectableCard(
     subtitle: String,
     imageUrl: String,
     isSelected: Boolean,
+    // "350 m" from the visitor, or null when unknown.
+    distance: String? = null,
     onToggleSelected: () -> Unit,
     onOpenDetails: () -> Unit,
     // Set on the first card only, so the tutorial can point at it.
@@ -264,7 +306,10 @@ private fun SelectableCard(
                 overflow = TextOverflow.Ellipsis
             )
 
-            if (subtitle.isNotBlank()) {
+            if (distance != null) {
+                Spacer(Modifier.height(3.dp))
+                DistanceLabel(distance)
+            } else if (subtitle.isNotBlank()) {
                 Spacer(Modifier.height(2.dp))
                 Text(
                     text = subtitle,
@@ -440,7 +485,7 @@ fun RecommendationsStep(
             TutorialStep(
                 target = null,
                 title = "Suggested spots",
-                body = "These places are close to the sites you picked and match your interests. Tap one for details, or tap its circle to add it to your trip."
+                body = "Spots near your sites that match your interests come first. Every other place is listed below them, so you can add any of them too. Tap one for details, or its circle to add it."
             ),
             TutorialStep(
                 target = "builder_generate",
@@ -459,38 +504,20 @@ fun RecommendationsStep(
         ) {
 
             WizardStepHeader(
-                title = "Smart Recommendations",
-                subtitle = "Tap a spot for details \u2022 tap the circle to add it",
+                title = "Add Places",
+                subtitle = "Suggestions first \u2022 circle to add",
                 stepLabel = "3 / 3",
                 onBackClick = { viewModel.backToInterests() }
             )
 
-            if (uiState.recommendedPlaces.isEmpty()) {
-
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "No matching spots within walking distance of your " +
-                                "selected sites \u2014 you can still generate your route with " +
-                                "just the sites you picked.",
-                        color = TextSecondary,
-                        fontSize = 13.sp,
-                        textAlign = TextAlign.Center
-                    )
-                }
-
-            } else {
-
-                RecommendationsList(
-                    viewModel = viewModel,
-                    places = uiState.recommendedPlaces,
-                    selectedIds = uiState.selectedRecommendationIds
-                )
-            }
+            // Suggestions first, then every other place, so each one still
+            // gets a chance to be picked.
+            RecommendationsList(
+                viewModel = viewModel,
+                recommended = uiState.recommendedPlaces,
+                allPlaces = uiState.allPlaces,
+                selectedIds = uiState.selectedRecommendationIds
+            )
 
             Column(
                 modifier = Modifier
@@ -524,102 +551,220 @@ fun RecommendationsStep(
 @Composable
 private fun ColumnScope.RecommendationsList(
     viewModel: ItineraryViewModel,
-    places: List<Place>,
+    recommended: List<Place>,
+    allPlaces: List<Place>,
     selectedIds: Set<String>
 ) {
 
+    val context = LocalContext.current
+    val userPosition by UserDistance.position.collectAsState()
+    LaunchedEffect(Unit) { UserDistance.refresh(context) }
+
+    var query by rememberSaveable { mutableStateOf("") }
+    var sort by rememberSaveable { mutableStateOf(BuilderSort.NEAREST) }
+    var category by rememberSaveable { mutableStateOf<String?>(null) }
+
+    // Only places that can be routed to (they need coordinates).
+    val routable = remember(allPlaces) { allPlaces.filter { it.latitude != null && it.longitude != null } }
+    val recommendedIds = remember(recommended) { recommended.map { it.documentId }.toSet() }
+
+    // Category chips for the kinds of place there are, in the same order as
+    // the interests step, each with how many there are.
+    val chips = remember(routable) {
+        INTEREST_OPTIONS.mapNotNull { option ->
+            val count = routable.count { placeGroup(it) == option.key }
+            if (count > 0) BuilderCategoryChip(option.key, option.label, option.icon, count) else null
+        }
+    }
+    // A category that no longer has any places falls back to All.
+    val activeCategory = category?.takeIf { key -> chips.any { it.key == key } }
+
+    fun ordered(items: List<Place>) = builderFilterAndSort(
+        items = items.filter { activeCategory == null || placeGroup(it) == activeCategory },
+        query = query,
+        sort = sort,
+        from = userPosition,
+        name = { it.name },
+        latitude = { it.latitude },
+        longitude = { it.longitude },
+        location = { it.location },
+        description = { it.description }
+    )
+
+    // Suggested (near your sites, matching your interests) first; then
+    // everything else, so every place still gets a chance to be picked.
+    val shownSuggested = remember(routable, recommendedIds, query, sort, activeCategory, userPosition) {
+        ordered(routable.filter { it.documentId in recommendedIds })
+    }
+    val shownOthers = remember(routable, recommendedIds, query, sort, activeCategory, userPosition) {
+        ordered(routable.filter { it.documentId !in recommendedIds })
+    }
+
+    BuilderListControls(
+        query = query,
+        onQueryChange = { query = it },
+        placeholder = "Search caf\u00E9s, parks, hotels...",
+        sort = sort,
+        onSortChange = { sort = it },
+        hasLocation = userPosition != null,
+        resultCount = shownSuggested.size + shownOthers.size,
+        categories = chips,
+        selectedCategory = activeCategory,
+        onCategoryChange = { category = it }
+    )
+
+    if (shownSuggested.isEmpty() && shownOthers.isEmpty()) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(32.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = if (query.isNotBlank()) "No places match \"$query\"." else "No places to add yet.",
+                color = TextSecondary,
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center
+            )
+        }
+        return
+    }
+
     LazyColumn(
         modifier = Modifier.weight(1f),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
 
-        lazyColumnItems(places) { place ->
-
-            val isSelected = place.documentId in selectedIds
-
-            // Same rule as step 1: the row (picture or name) opens details,
-            // the circle on the right adds it to the trip.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(elevation = 2.dp, shape = RoundedCornerShape(16.dp))
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(CardSurface)
-                    .then(
-                        if (isSelected) Modifier.border(2.dp, Primary, RoundedCornerShape(16.dp))
-                        else Modifier
-                    )
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        viewModel.openStopPreview(
-                            refId = place.documentId,
-                            refType = "place",
-                            mode = StopPreviewMode.RECOMMENDATION
-                        )
-                    }
-                    .padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-
-                Box(
-                    modifier = Modifier
-                        .size(56.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(SurfaceSoft)
-                ) {
-                    if (place.featuredImage.isNotBlank()) {
-                        AsyncImage(
-                            model = place.featuredImage,
-                            contentDescription = place.name,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text(place.categoryEmoji, fontSize = 22.sp)
-                        }
-                    }
-                }
-
-                Spacer(Modifier.width(12.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
-
-                    Text(
-                        text = place.name,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.5.sp,
-                        color = TextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.LocationOn,
-                            contentDescription = null,
-                            tint = TextSecondary,
-                            modifier = Modifier.size(11.dp)
-                        )
-                        Spacer(Modifier.width(2.dp))
-                        Text(
-                            text = place.categoryLabel,
-                            fontSize = 11.sp,
-                            color = TextSecondary
-                        )
-                    }
-                }
-
-                SelectCircle(
-                    isSelected = isSelected,
-                    onClick = { viewModel.toggleRecommendationSelected(place.documentId) },
-                    unselectedFill = SurfaceSoft
-                )
+        if (shownSuggested.isNotEmpty()) {
+            item {
+                PlaceSectionHeader(title = "Suggested for you")
+            }
+            lazyColumnItems(shownSuggested) { place ->
+                PlacePickRow(viewModel, place, place.documentId in selectedIds, userPosition, suggested = true)
             }
         }
+
+        if (shownOthers.isNotEmpty()) {
+            item {
+                PlaceSectionHeader(
+                    title = if (shownSuggested.isEmpty()) "All places" else "More places",
+                    topSpace = shownSuggested.isNotEmpty()
+                )
+            }
+            lazyColumnItems(shownOthers) { place ->
+                PlacePickRow(viewModel, place, place.documentId in selectedIds, userPosition, suggested = false)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaceSectionHeader(title: String, topSpace: Boolean = false) {
+    Text(
+        text = title,
+        fontSize = 14.sp,
+        fontWeight = FontWeight.Bold,
+        color = TextPrimary,
+        modifier = Modifier.padding(top = if (topSpace) 10.dp else 0.dp)
+    )
+}
+
+/** One place in step 3: tap for details, the circle adds it to the trip. */
+@Composable
+private fun PlacePickRow(
+    viewModel: ItineraryViewModel,
+    place: Place,
+    isSelected: Boolean,
+    userPosition: com.google.android.gms.maps.model.LatLng?,
+    suggested: Boolean
+) {
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .shadow(elevation = 2.dp, shape = RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(16.dp))
+            .background(CardSurface)
+            .then(
+                if (isSelected) Modifier.border(2.dp, Primary, RoundedCornerShape(16.dp))
+                else Modifier
+            )
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) {
+                viewModel.openStopPreview(
+                    refId = place.documentId,
+                    refType = "place",
+                    mode = StopPreviewMode.RECOMMENDATION
+                )
+            }
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(SurfaceSoft)
+        ) {
+            if (place.featuredImage.isNotBlank()) {
+                AsyncImage(
+                    model = place.featuredImage,
+                    contentDescription = place.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(place.categoryEmoji, fontSize = 22.sp)
+                }
+            }
+        }
+
+        Spacer(Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+
+            Text(
+                text = place.name,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.5.sp,
+                color = TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Spacer(Modifier.height(5.dp))
+
+            // What kind of place it is, at a glance, then how far.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "${place.categoryEmoji} ${place.categoryLabel}",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Primary,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(PrimarySoft)
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+                UserDistance.labelFor(place.latitude, place.longitude, userPosition)?.let { distance ->
+                    Spacer(Modifier.width(8.dp))
+                    DistanceLabel(distance)
+                }
+            }
+        }
+
+        SelectCircle(
+            isSelected = isSelected,
+            onClick = { viewModel.toggleRecommendationSelected(place.documentId) },
+            unselectedFill = SurfaceSoft
+        )
     }
 }
 
@@ -668,5 +813,31 @@ private fun SelectCircle(
                 )
             }
         }
+    }
+}
+
+/** Which interest chip a place belongs to (cafés and restaurants are both Food & Drink). */
+private fun placeGroup(place: Place): String = when (place.category.lowercase()) {
+    "food", "cafe", "restaurant" -> "food"
+    else -> place.category.lowercase()
+}
+
+/** "➤ 350 m away" on builder cards. */
+@Composable
+private fun DistanceLabel(distance: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = Icons.Default.NearMe,
+            contentDescription = null,
+            tint = TextSecondary,
+            modifier = Modifier.size(11.dp)
+        )
+        Spacer(Modifier.width(3.dp))
+        Text(
+            text = if (distance == "Nearby") distance else "$distance away",
+            fontSize = 11.sp,
+            color = TextSecondary,
+            maxLines = 1
+        )
     }
 }

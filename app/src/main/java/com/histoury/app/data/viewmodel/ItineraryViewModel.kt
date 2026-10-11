@@ -22,6 +22,7 @@ import com.histoury.app.data.repository.ItineraryRepository
 import com.histoury.app.data.repository.PlaceRepository
 import com.histoury.app.data.repository.VisitHistoryRepository
 import com.histoury.app.data.repository.TravelMode
+import com.histoury.app.map.TravelModes
 import com.histoury.app.data.routing.RoutePath
 import com.histoury.app.data.routing.RoutePathRepository
 import com.histoury.app.util.VoiceGuidanceManager
@@ -34,6 +35,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.util.Date
@@ -82,6 +84,9 @@ private const val FALLBACK_LONGITUDE = 120.9760
 
 // 9:00 AM, in minutes past midnight.
 private const val DEFAULT_START_MINUTES = 9 * 60
+
+/** Closer than this to the first stop and there's no "getting there" to show. */
+private const val APPROACH_MIN_METERS = 300f
 
 data class ItineraryUiState(
 
@@ -149,6 +154,16 @@ data class ItineraryUiState(
     /** At least one leg couldn't be routed and is a straight-line estimate. */
     val routeIsApproximate: Boolean = false,
 
+    /**
+     * How to get from where the visitor is right now to the first stop,
+     * for when they aren't in Intramuros yet. Live only: never saved with
+     * the itinerary (it depends on where the phone is). Null when they're
+     * already near the first stop, or their location isn't known.
+     */
+    val approachLeg: com.histoury.app.data.routing.RouteLeg? = null,
+
+    val isLoadingApproach: Boolean = false,
+
     // ----- schedule -----
 
     val startTimeMinutes: Int = DEFAULT_START_MINUTES,
@@ -210,6 +225,8 @@ class ItineraryViewModel(
     /** Cancelled and replaced whenever the stop order or travel mode changes. */
     private var routePathJob: Job? = null
 
+    private var approachJob: Job? = null
+
     /**
      * What the open itinerary looked like when it was last loaded or saved —
      * name, travel mode, start time, stop order and visit lengths. Null for
@@ -217,6 +234,19 @@ class ItineraryViewModel(
      * tell whether leaving the overview would lose anything.
      */
     private var savedFingerprint: String? = null
+
+    /**
+     * A saved itinerary's travel mode string when this build doesn't know it
+     * at all (a value written by a newer app version). The overview treats
+     * such a trip as Walking, the app's default, but saving writes the
+     * original value back unchanged so it is never lost. Cleared as soon as
+     * the visitor picks a mode themselves.
+     *
+     * Known modes that just can't be routed yet (TWO_WHEELER, TRANSIT on the
+     * OpenStreetMap map) don't need this: they stay in [ItineraryUiState.travelMode]
+     * as they are, and the screen shows "Coming Soon" for them.
+     */
+    private var preservedSavedTravelMode: String? = null
 
     private fun fingerprint(state: ItineraryUiState): String = buildString {
         append(state.itineraryName.trim()).append('|')
@@ -302,6 +332,20 @@ class ItineraryViewModel(
             _uiState.collect { state -> persistWizardState(state) }
         }
         if (_uiState.value.isBuilderActive) loadCatalogIfNeeded()
+        // A car/motorcycle trip's legs are re-planned when "Avoid
+        // expressways and tolls" is switched (drop(1): not the initial value).
+        viewModelScope.launch {
+            com.histoury.app.data.repository.DriveOptions.avoidExpressways
+                .drop(1)
+                .collect {
+                    val state = _uiState.value
+                    if (state.isBuilderActive &&
+                        com.histoury.app.data.repository.DriveOptions.appliesTo(state.travelMode)
+                    ) {
+                        refreshRoutePath()
+                    }
+                }
+        }
     }
 
     private fun persistWizardState(state: ItineraryUiState) {
@@ -487,6 +531,7 @@ class ItineraryViewModel(
         )
 
         savedFingerprint = null
+        preservedSavedTravelMode = null
 
         loadCatalogIfNeeded()
     }
@@ -494,9 +539,11 @@ class ItineraryViewModel(
     /** Opens a saved itinerary straight into the route overview, ready to start, edit, or delete. */
     fun openSavedItinerary(itinerary: Itinerary) {
 
-        val mode = TravelMode.values()
-            .firstOrNull { it.wireValue == itinerary.travelMode }
-            ?: TravelMode.WALKING
+        // The saved mode is kept as it is, even one that can't be routed yet.
+        val mode = TravelModes.fromWire(itinerary.travelMode)
+        preservedSavedTravelMode = itinerary.travelMode.takeIf { wire ->
+            wire.isNotBlank() && TravelMode.entries.none { it.wireValue == wire }
+        }
 
         // distinctBy guards the timeline's LazyColumn, whose keys must be
         // unique — an older document with a repeated stop would crash it.
@@ -646,13 +693,15 @@ class ItineraryViewModel(
         )
 
         // Nothing is pre-selected. Picks made on an earlier visit to this
-        // step are kept, as long as that place is still being recommended.
-        val stillRecommended = recommendations.map { it.documentId }.toSet()
+        // step are kept, as long as the place still exists: the step lists
+        // EVERY place (suggestions first), so a pick no longer has to be a
+        // suggestion.
+        val stillListed = state.allPlaces.map { it.documentId }.toSet()
 
         _uiState.value = state.copy(
             builderStep = BuilderStep.RECOMMENDATIONS,
             recommendedPlaces = recommendations,
-            selectedRecommendationIds = state.selectedRecommendationIds.intersect(stillRecommended)
+            selectedRecommendationIds = state.selectedRecommendationIds.intersect(stillListed)
         )
     }
 
@@ -728,7 +777,8 @@ class ItineraryViewModel(
             val keptRecommendations = if (state.selectedInterestCategories.isEmpty()) {
                 emptyList()
             } else {
-                state.recommendedPlaces.filter {
+                // Any place the visitor picked in step 3, suggested or not.
+                state.allPlaces.filter {
                     it.documentId in state.selectedRecommendationIds
                 }
             }
@@ -763,7 +813,8 @@ class ItineraryViewModel(
                     longitude = lng,
                     category = place.category,
                     estimatedVisitMinutes = ItineraryPlanner.defaultVisitMinutes("place"),
-                    isRecommended = true
+                    // "Suggested" only for places Histoury actually suggested.
+                    isRecommended = state.recommendedPlaces.any { it.documentId == place.documentId }
                 )
             }
 
@@ -895,7 +946,8 @@ class ItineraryViewModel(
                 documentId = documentId,
                 name = state.itineraryName,
                 orderedStops = state.generatedStops,
-                startedAtMillis = timestampMillis(state.startedAt) ?: System.currentTimeMillis()
+                startedAtMillis = timestampMillis(state.startedAt) ?: System.currentTimeMillis(),
+                travelModeWire = state.travelMode.wireValue
             ) ?: return@launch
 
             announceTripStart(state, firstStop, isResuming)
@@ -980,6 +1032,13 @@ class ItineraryViewModel(
 
     fun setTravelMode(mode: TravelMode) {
 
+        // Only routable modes can be newly chosen; a saved coming-soon mode
+        // stays selected until the visitor picks another one.
+        if (!TravelModes.isAvailable(mode)) return
+
+        // The visitor chose a mode: that is what gets saved from now on.
+        preservedSavedTravelMode = null
+
         if (_uiState.value.travelMode == mode) return
 
         _uiState.value = _uiState.value.copy(travelMode = mode, routePath = null)
@@ -1021,6 +1080,10 @@ class ItineraryViewModel(
 
         routePathJob?.cancel()
 
+        // The way there from the visitor's current position follows the
+        // same first stop and travel mode, so it refreshes alongside.
+        refreshApproach()
+
         val stops = _uiState.value.generatedStops
 
         if (stops.size < 2) {
@@ -1039,6 +1102,20 @@ class ItineraryViewModel(
         }
 
         val mode = _uiState.value.travelMode
+
+        if (!TravelModes.isAvailable(mode)) {
+            // Coming soon: no route is fetched, and none is fetched for a
+            // different mode in its place. Times stay as straight-line
+            // estimates, marked approximate; the screen explains why.
+            _uiState.value = _uiState.value.copy(
+                routePath = null,
+                isLoadingRoutePath = false,
+                routeIsApproximate = true,
+                totalVisitMinutes = stops.sumOf { it.estimatedVisitMinutes },
+                schedule = ItineraryPlanner.buildSchedule(stops, null)
+            )
+            return
+        }
 
         routePathJob = viewModelScope.launch {
 
@@ -1087,6 +1164,68 @@ class ItineraryViewModel(
                 totalVisitMinutes = measured.totalVisitMinutes,
                 schedule = ItineraryPlanner.buildSchedule(stops, path)
             )
+        }
+    }
+
+    /**
+     * Routes the visitor from where they are now to the first stop (in the
+     * trip's travel mode), unless they're already close to it. Shown on the
+     * itinerary map and as "Getting there" above the stops.
+     */
+    private fun refreshApproach() {
+
+        approachJob?.cancel()
+
+        val stops = _uiState.value.generatedStops
+        val mode = _uiState.value.travelMode
+        val first = stops.firstOrNull()
+
+        if (first == null || !TravelModes.isAvailable(mode)) {
+            _uiState.value = _uiState.value.copy(approachLeg = null, isLoadingApproach = false)
+            return
+        }
+
+        approachJob = viewModelScope.launch {
+
+            val start = resolveStartPoint()
+            if (start.isFallback) {
+                _uiState.value = _uiState.value.copy(approachLeg = null, isLoadingApproach = false)
+                return@launch
+            }
+
+            val origin = LatLng(start.latitude, start.longitude)
+            val destination = LatLng(first.latitude, first.longitude)
+
+            val gap = FloatArray(1)
+            android.location.Location.distanceBetween(
+                origin.latitude, origin.longitude, destination.latitude, destination.longitude, gap
+            )
+            if (gap[0] < APPROACH_MIN_METERS) {
+                // Already there: nothing to direct.
+                _uiState.value = _uiState.value.copy(approachLeg = null, isLoadingApproach = false)
+                return@launch
+            }
+
+            _uiState.value = _uiState.value.copy(isLoadingApproach = true)
+
+            val leg = try {
+                routePathRepository.getLeg(
+                    origin = origin,
+                    destination = destination,
+                    mode = mode,
+                    destinationSiteId = first.refId.takeIf { first.refType == "site" }
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+
+            val current = _uiState.value
+            // The first stop or the mode may have changed while this ran.
+            if (current.generatedStops.firstOrNull() != first || current.travelMode != mode) return@launch
+
+            _uiState.value = current.copy(approachLeg = leg, isLoadingApproach = false)
         }
     }
 
@@ -1293,7 +1432,7 @@ class ItineraryViewModel(
         totalDistanceMeters = state.totalDistanceMeters,
         totalWalkingMinutes = state.totalWalkingMinutes,
         totalVisitMinutes = state.totalVisitMinutes,
-        travelMode = state.travelMode.wireValue,
+        travelMode = preservedSavedTravelMode ?: state.travelMode.wireValue,
         startTimeMinutes = state.startTimeMinutes,
         completedStopIds = state.generatedStops.filter { it.status == StopStatus.COMPLETED }.map { it.refId },
         status = state.itineraryStatus,
@@ -1378,7 +1517,8 @@ class ItineraryViewModel(
                         documentId = docId,
                         name = state.itineraryName,
                         orderedStops = state.generatedStops,
-                        startedAtMillis = timestampMillis(state.startedAt) ?: System.currentTimeMillis()
+                        startedAtMillis = timestampMillis(state.startedAt) ?: System.currentTimeMillis(),
+                        travelModeWire = state.travelMode.wireValue
                     )
                 }
                 _uiState.value = _uiState.value.copy(isSaving = false, isBuilderActive = false)

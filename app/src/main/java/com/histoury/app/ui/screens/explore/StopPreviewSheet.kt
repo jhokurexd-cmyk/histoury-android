@@ -90,7 +90,9 @@ internal data class PreviewFact(
 
 internal data class PreviewContact(
     val icon: ImageVector,
-    val value: String
+    val value: String,
+    // What tapping it opens: tel:, https:// or mailto:. Null = not tappable.
+    val uri: android.net.Uri? = null
 )
 
 /**
@@ -109,6 +111,8 @@ internal data class StopPreviewData(
     val description: String = "",
     val facts: List<PreviewFact> = emptyList(),
     val contacts: List<PreviewContact> = emptyList(),
+    // Hotels only: their own booking page (see BookStayButton).
+    val bookingUrl: String = "",
     val averageRating: Double = 0.0,
     val reviewCount: Int = 0,
     val visitCount: Int = 0,
@@ -176,10 +180,18 @@ internal fun Place.toStopPreview(): StopPreviewData {
         )
     }
 
+    // Tappable, like on the place's own page: Call opens the dialer, the
+    // website opens the browser, email opens the mail app.
     val contacts = buildList {
-        if (contactPhone.isNotBlank()) add(PreviewContact(Icons.Default.Phone, contactPhone))
-        if (contactWebsite.isNotBlank()) add(PreviewContact(Icons.Default.Language, contactWebsite))
-        if (contactEmail.isNotBlank()) add(PreviewContact(Icons.Default.Email, contactEmail))
+        if (contactPhone.isNotBlank()) {
+            add(PreviewContact(Icons.Default.Phone, contactPhone, android.net.Uri.parse("tel:${contactPhone.trim()}")))
+        }
+        if (contactWebsite.isNotBlank()) {
+            add(PreviewContact(Icons.Default.Language, contactWebsite, previewWebUri(contactWebsite)))
+        }
+        if (contactEmail.isNotBlank()) {
+            add(PreviewContact(Icons.Default.Email, contactEmail, android.net.Uri.parse("mailto:${contactEmail.trim()}")))
+        }
     }
 
     return StopPreviewData(
@@ -194,6 +206,7 @@ internal fun Place.toStopPreview(): StopPreviewData {
         description = fullDescription.ifBlank { description },
         facts = facts,
         contacts = contacts,
+        bookingUrl = bookingUrl.trim(),
         isHistoricalSite = false,
         isUnlocked = true,
         hasCoordinates = latitude != null && longitude != null
@@ -430,6 +443,11 @@ internal fun StopPreviewSheet(
 
                 Column(modifier = Modifier.padding(horizontal = 20.dp)) {
 
+                    if (preview.bookingUrl.isNotBlank()) {
+                        Spacer(Modifier.height(16.dp))
+                        com.histoury.app.ui.components.BookStayButton(preview.bookingUrl)
+                    }
+
                     if (preview.contacts.isNotEmpty()) {
 
                         Spacer(Modifier.height(16.dp))
@@ -438,10 +456,33 @@ internal fun StopPreviewSheet(
 
                         Spacer(Modifier.height(8.dp))
 
+                        val context = androidx.compose.ui.platform.LocalContext.current
+
                         preview.contacts.forEach { contact ->
 
                             Row(
-                                modifier = Modifier.padding(bottom = 7.dp),
+                                modifier = Modifier
+                                    .padding(bottom = 7.dp)
+                                    .then(
+                                        if (contact.uri != null) {
+                                            Modifier.clickable(
+                                                interactionSource = remember { MutableInteractionSource() },
+                                                indication = null
+                                            ) {
+                                                val intent = android.content.Intent(
+                                                    if (contact.uri.scheme == "tel") android.content.Intent.ACTION_DIAL
+                                                    else android.content.Intent.ACTION_VIEW,
+                                                    contact.uri
+                                                )
+                                                runCatching { context.startActivity(intent) }.onFailure {
+                                                    android.widget.Toast.makeText(
+                                                        context, "No app on this phone can open that.",
+                                                        android.widget.Toast.LENGTH_SHORT
+                                                    ).show()
+                                                }
+                                            }
+                                        } else Modifier
+                                    ),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
@@ -454,7 +495,8 @@ internal fun StopPreviewSheet(
                                 Text(
                                     text = contact.value,
                                     fontSize = 12.5.sp,
-                                    color = TextSecondary,
+                                    // Coral = tappable, like a link.
+                                    color = if (contact.uri != null) Primary else TextSecondary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -754,4 +796,12 @@ private fun SecondaryActionButton(text: String, onClick: () -> Unit) {
             color = TextPrimary
         )
     }
+}
+
+/** A website as an https:// link (admins often type just "example.com"). */
+private fun previewWebUri(raw: String): android.net.Uri {
+    val value = raw.trim()
+    return android.net.Uri.parse(
+        if (value.startsWith("http://", true) || value.startsWith("https://", true)) value else "https://$value"
+    )
 }

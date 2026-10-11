@@ -16,6 +16,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
+    <!-- Keeps site narration playing (with a media notification) after the
+         visitor presses Home or locks the phone. See VoiceoverPlaybackService. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <!--
         Only for "Save to Device" in the Gallery, and only on Android 9 and
         below. From Android 10 the media store places the file itself and an
@@ -91,6 +96,12 @@
             android:name=".location.NavigationForegroundService"
             android:exported="false"
             android:foregroundServiceType="location"
+            android:stopWithTask="true" />
+
+        <service
+            android:name=".audio.VoiceoverPlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback"
             android:stopWithTask="true" />
 
         <receiver

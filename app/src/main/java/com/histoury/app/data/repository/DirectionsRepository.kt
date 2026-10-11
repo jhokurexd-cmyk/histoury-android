@@ -3,6 +3,7 @@ package com.histoury.app.data.repository
 import com.google.android.gms.maps.model.LatLng
 import com.google.firebase.functions.FirebaseFunctions
 import com.google.firebase.functions.FirebaseFunctionsException
+import com.histoury.app.map.MapConfig
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.tasks.await
 
@@ -24,8 +25,17 @@ data class RouteStep(
     val endLatitude: Double,
     val endLongitude: Double,
     /** "WALK", "DRIVE", "TWO_WHEELER" or "TRANSIT"; blank from older servers. */
-    val travelMode: String = ""
-)
+    val travelMode: String = "",
+    /** This step's own line (commute routes only), so walking and riding can be drawn apart. */
+    val points: List<LatLng> = emptyList(),
+    /** Set on the riding steps of a commute route. */
+    val transit: TransitInfo? = null,
+    /** How long this step takes, from the server (0 when not given). */
+    val durationSeconds: Int = 0
+) {
+    val isTransitRide: Boolean
+        get() = travelMode == "TRANSIT" || transit != null
+}
 
 /** A verified access point the route was sent to (see historical_sites.entrances). */
 data class RouteEntrance(
@@ -93,7 +103,19 @@ enum class DirectionsFailure {
     /** No connection, or the service didn't answer. Worth retrying. */
     UNAVAILABLE,
     /** Still rate limited after retrying. */
-    RATE_LIMITED
+    RATE_LIMITED,
+    /**
+     * The routing server has no provider set up for this travel mode (for
+     * example motorcycle before a Valhalla endpoint is configured). Not the
+     * visitor's connection, so the screen mustn't say "check your connection".
+     */
+    NOT_SET_UP,
+    /**
+     * The deployed routing server is older than this app: on the
+     * OpenStreetMap map it answered with a Google route, which may only be
+     * shown on a Google map. Fixed by redeploying getRoute.
+     */
+    SERVER_NEEDS_UPDATE
 }
 
 sealed interface DirectionsOutcome {
@@ -104,7 +126,39 @@ sealed interface DirectionsOutcome {
 enum class TravelMode(val wireValue: String) {
     WALKING("WALK"),
     DRIVING("DRIVE"),
-    MOTORCYCLE("TWO_WHEELER")
+    MOTORCYCLE("TWO_WHEELER"),
+    /**
+     * Public transport (Google transit: trains and buses where Google has
+     * them). Jeepneys are mostly not covered. Lines, stops and times come
+     * only from Google's answer — nothing is filled in by the app.
+     */
+    COMMUTE("TRANSIT")
+}
+
+/** One ride on a commute route, exactly as Google returned it (any field may be missing). */
+data class TransitInfo(
+    val lineName: String?,
+    val lineShortName: String?,
+    /** "#RRGGBB" from the operator, when given. */
+    val lineColor: String?,
+    /** e.g. "BUS", "SUBWAY", "LIGHT_RAIL", "HEAVY_RAIL". */
+    val vehicleType: String?,
+    val vehicleName: String?,
+    val headsign: String?,
+    val stopCount: Int?,
+    val departureStop: String?,
+    val arrivalStop: String?,
+    /** RFC 3339 timestamps when Google has a schedule; null otherwise. */
+    val departureTime: String?,
+    val arrivalTime: String?,
+    val agencies: List<String>
+) {
+    /** "LRT-1", else the full line name, else the vehicle ("Bus"). */
+    val label: String
+        get() = lineShortName?.takeIf { it.isNotBlank() }
+            ?: lineName?.takeIf { it.isNotBlank() }
+            ?: vehicleName?.takeIf { it.isNotBlank() }
+            ?: "Public transport"
 }
 
 class DirectionsRepository {
@@ -141,7 +195,11 @@ class DirectionsRepository {
          * instead of the nearest road to the site's centre.
          */
         destinationSiteId: String? = null,
-        avoidHighways: Boolean = false
+        /**
+         * Avoid expressways and tolls. Defaults to the visitor's saved choice
+         * ([DriveOptions]) for car and motorcycle; walking/commute ignore it.
+         */
+        avoidHighways: Boolean = DriveOptions.avoidFor(mode)
     ): DirectionsOutcome {
 
         var attempt = 0
@@ -185,6 +243,18 @@ class DirectionsRepository {
             }
         }
 
+        // The original getDirections has no commute mode (it would quietly
+        // answer with a walking route), so commute needs getRoute.
+        if (mode == TravelMode.COMMUTE) {
+            return Done(DirectionsOutcome.Failure(DirectionsFailure.UNAVAILABLE))
+        }
+
+        // getDirections answers with Google route geometry, which may only
+        // be drawn on a Google map — never on the OpenStreetMap (MapLibre) map.
+        if (MapConfig.useMapLibre) {
+            return Done(DirectionsOutcome.Failure(DirectionsFailure.UNAVAILABLE))
+        }
+
         return callLegacyGetDirections(origin, destination, mode)
     }
 
@@ -202,13 +272,25 @@ class DirectionsRepository {
             val requestData = hashMapOf<String, Any>(
                 "origin" to point(origin),
                 "destination" to point(destination),
-                "mode" to mode.wireValue
+                "mode" to mode.wireValue,
+                // Which map will draw the route. "maplibre" tells the server
+                // to answer from OpenStreetMap-based providers only.
+                "renderer" to MapConfig.routingRenderer
             )
             if (!destinationSiteId.isNullOrBlank()) requestData["destinationSiteId"] = destinationSiteId
-            if (avoidHighways) requestData["options"] = hashMapOf("avoidHighways" to true)
+            // In Metro Manila the expressways are the toll roads, so the one
+            // switch asks the server to avoid both.
+            if (avoidHighways) requestData["options"] = hashMapOf("avoidHighways" to true, "avoidTolls" to true)
 
             val data = functions.getHttpsCallable("getRoute").call(requestData).await().data as? Map<*, *>
-            Done(parseResult(data))
+            val outcome = parseResult(data)
+            // Belt and braces for a server not yet updated for "renderer":
+            // a Google-made route is never drawn on the MapLibre map.
+            if (MapConfig.useMapLibre && outcome is DirectionsOutcome.Success && outcome.result.provider == "google") {
+                Done(DirectionsOutcome.Failure(DirectionsFailure.SERVER_NEEDS_UPDATE))
+            } else {
+                Done(outcome)
+            }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: FirebaseFunctionsException) {
@@ -219,6 +301,11 @@ class DirectionsRepository {
                 e.code == FirebaseFunctionsException.Code.NOT_FOUND && reason == null -> null
                 e.code == FirebaseFunctionsException.Code.NOT_FOUND ->
                     Done(DirectionsOutcome.Failure(DirectionsFailure.NO_ROUTE))
+                // "NOT_CONFIGURED" / "MODE_UNAVAILABLE": the server can't
+                // route this mode yet. Never retried as a different mode.
+                e.code == FirebaseFunctionsException.Code.FAILED_PRECONDITION &&
+                    (reason == "NOT_CONFIGURED" || reason == "MODE_UNAVAILABLE") ->
+                    Done(DirectionsOutcome.Failure(DirectionsFailure.NOT_SET_UP))
                 e.code == FirebaseFunctionsException.Code.RESOURCE_EXHAUSTED -> {
                     val seconds = ((e.details as? Map<*, *>)?.get("retryAfterSeconds") as? Number)?.toLong()
                     RateLimited(retryAfterMillis = (seconds ?: 1L) * 1000L)
@@ -359,6 +446,7 @@ class DirectionsRepository {
             val maneuver = stepMap["maneuver"] as? String ?: "STRAIGHT"
             val instructionText = stepMap["instructions"] as? String ?: ""
             val stepDistanceMeters = (stepMap["distanceMeters"] as? Number)?.toInt() ?: 0
+            val stepDurationSeconds = (stepMap["durationSeconds"] as? Number)?.toInt() ?: 0
 
             val startMap = stepMap["startLocation"] as? Map<*, *>
             val endMap = stepMap["endLocation"] as? Map<*, *>
@@ -380,9 +468,32 @@ class DirectionsRepository {
                 startLongitude = startLng,
                 endLatitude = endLat,
                 endLongitude = endLng,
-                travelMode = stepMap["travelMode"] as? String ?: ""
+                travelMode = stepMap["travelMode"] as? String ?: "",
+                points = (stepMap["polyline"] as? String)?.let { decodePolyline(it) }.orEmpty(),
+                transit = parseTransit(stepMap["transit"]),
+                durationSeconds = stepDurationSeconds
             )
         }
+    }
+
+    private fun parseTransit(raw: Any?): TransitInfo? {
+        val map = raw as? Map<*, *> ?: return null
+        fun text(key: String) = (map[key] as? String)?.takeIf { it.isNotBlank() }
+        fun stopName(key: String) = ((map[key] as? Map<*, *>)?.get("name") as? String)?.takeIf { it.isNotBlank() }
+        return TransitInfo(
+            lineName = text("lineName"),
+            lineShortName = text("lineShortName"),
+            lineColor = text("lineColor"),
+            vehicleType = text("vehicleType"),
+            vehicleName = text("vehicleName"),
+            headsign = text("headsign"),
+            stopCount = (map["stopCount"] as? Number)?.toInt(),
+            departureStop = stopName("departureStop"),
+            arrivalStop = stopName("arrivalStop"),
+            departureTime = text("departureTime"),
+            arrivalTime = text("arrivalTime"),
+            agencies = (map["agencies"] as? List<*>)?.filterIsInstance<String>().orEmpty()
+        )
     }
 
     private fun decodePolyline(encoded: String): List<LatLng> {

@@ -7,7 +7,6 @@ import com.histoury.app.navigation.safePopBackStack
 import com.histoury.app.navigation.navigateSafely
 import com.histoury.app.data.offline.ArModelCache
 import com.histoury.app.data.model.isArReady
-import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -50,6 +49,7 @@ import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import com.histoury.app.ui.components.WrapRow
 import com.histoury.app.ui.components.rememberVoiceoverController
+import com.histoury.app.ui.components.rememberIsAtSite
 import com.histoury.app.ui.components.SiteContentTabRow
 import com.histoury.app.ui.components.SiteContentTabBody
 import com.histoury.app.data.viewmodel.SiteDetailsViewModel
@@ -67,7 +67,6 @@ import androidx.compose.material.icons.filled.LocalOffer
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Restaurant
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.histoury.app.theme.Outline
@@ -100,11 +99,20 @@ fun SiteDetailsScreen(
     // One controller for the whole screen. Sharing it is what makes the
     // sections mutually exclusive — starting a story stops the overview
     // instead of both reading at once.
-    val voiceover = rememberVoiceoverController()
+    val voiceover = rememberVoiceoverController(siteName = uiState.site?.siteName.orEmpty())
 
     LaunchedEffect(siteId) {
         siteDetailsViewModel.loadSite(siteId)
     }
+
+    // AR is offered whenever the visitor is actually at the site, not only
+    // when they came here from the Arrival screen. Opening the page from
+    // Menu > Site Information (or Favorites, the Map, History) while
+    // standing there used to hide AR, so they had to go round through the
+    // Arrival screen again just to open the camera. Only watched when the
+    // caller didn't already unlock it.
+    val isAtSite by rememberIsAtSite(uiState.site, enabled = !showArButton)
+    val arUnlocked = showArButton || isAtSite
 
     // Start downloading the AR model in the background as soon as this
     // site's details are showing, so it's usually already on the phone by
@@ -236,7 +244,7 @@ fun SiteDetailsScreen(
                                 .padding(HeroOverlayInset)
                         )
 
-                        // Share and favourite, paired as in the design.
+                        // Favourite (the Share button was removed).
                         Row(
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
@@ -245,37 +253,6 @@ fun SiteDetailsScreen(
                                 .padding(HeroOverlayInset),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-
-                            Box(Modifier.tutorialTarget("site_share")) {
-                                HeroIconButton(
-                                    icon = Icons.Default.Share,
-                                    contentDescription = "Share this site",
-                                    onClick = {
-                                        val text = buildString {
-                                            append(site.siteName)
-                                            if (site.location.isNotBlank()) {
-                                                append(" — ")
-                                                append(site.location)
-                                            }
-                                            append("\n\nDiscover it on Histoury.")
-                                        }
-                                        // A plain text share rather than a deep
-                                        // link: the app has no public web page to
-                                        // point at, and a link that opens nothing
-                                        // is worse than a name somebody can search.
-                                        context.startActivity(
-                                            Intent.createChooser(
-                                                Intent(Intent.ACTION_SEND).apply {
-                                                    type = "text/plain"
-                                                    putExtra(Intent.EXTRA_SUBJECT, site.siteName)
-                                                    putExtra(Intent.EXTRA_TEXT, text)
-                                                },
-                                                "Share ${site.siteName}"
-                                            )
-                                        )
-                                    }
-                                )
-                            }
 
                             // The real Favorites toggle, shared with Home,
                             // the map and Menu > Favorites.
@@ -500,18 +477,13 @@ fun SiteDetailsScreen(
                                     target = "site_favorite",
                                     title = "Save to Favorites",
                                     body = "Tap the heart to keep this site in Menu > Favorites."
-                                ),
-                                TutorialStep(
-                                    target = "site_share",
-                                    title = "Share",
-                                    body = "Send the site's name to a friend."
                                 )
                             )
                         )
 
                         TutorialTour(
                             id = "site_ar_button",
-                            enabled = showArButton && site.isArReady,
+                            enabled = arUnlocked && site.isArReady,
                             steps = listOf(
                                 TutorialStep(
                                     target = "site_ar",
@@ -549,8 +521,9 @@ fun SiteDetailsScreen(
                         // Two conditions gate the AR button, and they are
                         // deliberately separate.
                         //
-                        //   showArButton   the location gate — you have
-                        //                  arrived at this site.
+                        //   arUnlocked     the location gate — you have
+                        //                  arrived at this site, or GPS
+                        //                  shows you're there now.
                         //   isArReady      the content gate — this site has
                         //                  AR switched on and a model to
                         //                  place.
@@ -562,7 +535,7 @@ fun SiteDetailsScreen(
                         // may actually run lives in the AR screen itself.
                         val hasArContent = site.isArReady
 
-                        if (showArButton && hasArContent) {
+                        if (arUnlocked && hasArContent) {
 
                             Row(
                                 modifier = Modifier

@@ -23,6 +23,7 @@ import com.histoury.app.data.repository.PlaceRepository
 import com.histoury.app.data.repository.RouteStep
 import com.histoury.app.data.repository.TagRepository
 import com.histoury.app.data.repository.TravelMode
+import com.histoury.app.map.TravelModes
 import com.histoury.app.location.NavigationForegroundService
 import com.histoury.app.util.BearingSmoother
 import com.histoury.app.util.NavigationPipState
@@ -31,8 +32,10 @@ import com.histoury.app.util.VoiceGuidanceManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.sqrt
@@ -102,7 +105,14 @@ data class MapUiState(
     val routeNotice: String? = null,
 
     /** Credit line the current route needs on screen (OpenStreetMap-based routes); null for Google. */
-    val routeAttribution: String? = null
+    val routeAttribution: String? = null,
+
+    /**
+     * Commute only: every step of the plan (walks and rides, in order), for
+     * the step list and for drawing walking and riding parts differently.
+     * Empty in every other mode.
+     */
+    val commuteSteps: List<RouteStep> = emptyList()
 )
 
 /**
@@ -133,6 +143,7 @@ private const val SPEED_SMOOTHING = 0.35
 private const val STANDING_STILL_MPS = 0.3
 private const val AVERAGE_DRIVING_SPEED_METERS_PER_SECOND = 11.1f // ~40 km/h
 private const val AVERAGE_MOTORCYCLE_SPEED_METERS_PER_SECOND = 9.7f // ~35 km/h
+private const val AVERAGE_COMMUTE_SPEED_METERS_PER_SECOND = 3.5f // incl. walking and waiting
 private const val ARRIVAL_THRESHOLD_METERS = 25f
 // How often an ACTIVE navigation re-fetches its route although nothing went
 // wrong. It used to be every 20 s — about 45 paid calls for a 15-minute
@@ -157,6 +168,24 @@ private const val OFF_ROUTE_CONFIRMATIONS = 2
 // (~1.4 m/s) so real walking is never mistaken for "standing still."
 private const val MIN_BEARING_SPEED_METERS_PER_SECOND = 0.6f
 
+// The arrow follows the GPS course only when moving at least this fast
+// (about 9 km/h: cycling, a jeepney, a car) and the course is precise.
+// Slower than that — walking, standing at a corner — it follows the
+// phone's compass instead. At walking pace one GPS fix that lands a few
+// metres behind the last produces a course pointing straight backwards,
+// which is what made the arrow sometimes face the opposite way.
+private const val GPS_COURSE_MIN_SPEED_MPS = 2.5f
+private const val GPS_COURSE_MAX_ERROR_DEGREES = 30f
+
+// After a good GPS course, the compass waits this long before taking over
+// again, so the two don't fight while driving.
+private const val GPS_COURSE_HOLD_MS = 4_000L
+
+// The compass updates many times a second; the screen only needs a new
+// heading this often, and only for a visible change.
+private const val COMPASS_PUBLISH_INTERVAL_MS = 120L
+private const val COMPASS_PUBLISH_MIN_CHANGE_DEGREES = 2f
+
 // How far from the drawn route counts as having left it. Wider for
 // vehicles, whose GPS fix lags further behind at speed.
 private const val OFF_ROUTE_METERS_WALKING = 35f
@@ -176,6 +205,26 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
     private val directionsRepository = DirectionsRepository()
 
+    init {
+        // Flipping "Avoid expressways and tolls" re-plans a car or
+        // motorcycle route straight away (drop(1): not the initial value).
+        viewModelScope.launch {
+            com.histoury.app.data.repository.DriveOptions.avoidExpressways
+                .drop(1)
+                .collect {
+                    if (com.histoury.app.data.repository.DriveOptions.appliesTo(_uiState.value.travelMode)) {
+                        lastRouteRefreshAtMs = System.currentTimeMillis()
+                        fetchWalkingRouteIfReady()
+                    }
+                }
+        }
+    }
+
+    /** "Avoid expressways and tolls" switch on the directions sheet. */
+    fun setAvoidExpressways(avoid: Boolean) {
+        com.histoury.app.data.repository.DriveOptions.setAvoidExpressways(getApplication(), avoid)
+    }
+
     private val tagRepository = TagRepository()
 
     private val fusedLocationClient: FusedLocationProviderClient =
@@ -187,6 +236,11 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     // session, instead of being rebuilt (and losing that continuity) each
     // time the UI recomposes.
     private val bearingSmoother = BearingSmoother()
+
+    // Which way the phone faces, for the arrow when walking or standing.
+    private val compass = com.histoury.app.util.CompassHeading(application)
+    private var gpsCourseUntilMs = 0L
+    private var lastCompassPublishMs = 0L
 
     // Decides what turn-by-turn instruction, if any, to speak next as the
     // user's location moves along the current route's steps.
@@ -327,6 +381,10 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setTravelMode(mode: TravelMode) {
 
+        // The mode is kept exactly as asked, even when it can't be routed
+        // yet (commute / motorcycle on the OpenStreetMap map, see
+        // FeatureFlags). fetchWalkingRouteIfReady then shows "Coming Soon"
+        // instead of a route; nothing is substituted.
         if (_uiState.value.travelMode == mode) {
             return
         }
@@ -334,6 +392,40 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(travelMode = mode)
 
         fetchWalkingRouteIfReady()
+    }
+
+    /**
+     * The selected mode can't be routed yet: clear any route from the
+     * previous mode so nothing on screen pretends to be a route for this
+     * one. The sheet shows [TravelModes.unavailableMessage] instead.
+     */
+    private fun showTravelModeUnavailable() {
+
+        routeRequestJob?.cancel()
+        routeRequestJob = null
+        lastRoutedMode = null
+        secondsPerMeter = null
+
+        val mode = _uiState.value.travelMode
+
+        _uiState.value = _uiState.value.copy(
+            isRouteLoading = false,
+            isRerouting = false,
+            routePoints = emptyList(),
+            remainingRoutePoints = emptyList(),
+            etaMinutes = null,
+            isRouteEstimated = false,
+            errorMessage = null,
+            routeTargetLatitude = null,
+            routeTargetLongitude = null,
+            entranceName = null,
+            routeNotice = null,
+            routeAttribution = null,
+            commuteSteps = emptyList(),
+            nextInstruction = null
+        )
+
+        applyRouteStepsForVoiceGuidance(emptyList(), mode)
     }
 
     fun onLocationPermissionResult(granted: Boolean) {
@@ -396,6 +488,12 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
      * external maps app.
      */
     fun startNavigation() {
+
+        // No route exists for a mode that's coming soon, so there is nothing
+        // to guide along (this also stops an itinerary's auto-start).
+        if (!TravelModes.isAvailable(_uiState.value.travelMode)) {
+            return
+        }
 
         _uiState.value = _uiState.value.copy(
             isNavigating = true,
@@ -479,10 +577,32 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             locationCallback,
             Looper.getMainLooper()
         )
+
+        gpsCourseUntilMs = 0L
+        compass.start { heading -> onCompassHeading(heading) }
     }
 
     private fun stopLiveLocationUpdates() {
         fusedLocationClient.removeLocationUpdates(locationCallback)
+        compass.stop()
+    }
+
+    /** Compass readings (main thread, several a second) while navigating. */
+    private fun onCompassHeading(heading: Float) {
+        if (!_uiState.value.isNavigating) return
+        if (!compass.isReliable) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        // Moving fast with a good GPS course: that's the better answer.
+        if (now < gpsCourseUntilMs) return
+        if (now - lastCompassPublishMs < COMPASS_PUBLISH_INTERVAL_MS) return
+        val previous = _uiState.value.userBearing
+        val smoothed = bearingSmoother.update(heading)
+        if (previous != null) {
+            val change = abs(((smoothed - previous + 540f) % 360f) - 180f)
+            if (change < COMPASS_PUBLISH_MIN_CHANGE_DEGREES) return
+        }
+        lastCompassPublishMs = now
+        _uiState.value = _uiState.value.copy(userBearing = smoothed)
     }
 
     /**
@@ -565,6 +685,10 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
         return when {
             state.isRouteEstimated -> ROUTE_RETRY_WHEN_ESTIMATED_MS
+            // A commute plan is fixed once you're on your way: re-planning
+            // from a moving train or bus would give nonsense ("walk to the
+            // station you're already riding from").
+            state.travelMode == TravelMode.COMMUTE -> Long.MAX_VALUE
             state.travelMode == TravelMode.WALKING -> ROUTE_REFRESH_WALKING_MS
             else -> ROUTE_REFRESH_VEHICLE_MS
         }
@@ -575,6 +699,11 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
 
         if (!state.isNavigating || state.isRouteEstimated || progress == null) return false
+
+        // No automatic rerouting on a commute: on a train or jeep the GPS
+        // jumps and the vehicle's path isn't the drawn line, so "off route"
+        // would fire constantly. Switching modes re-plans if needed.
+        if (state.travelMode == TravelMode.COMMUTE) return false
 
         val limit = if (state.travelMode == TravelMode.WALKING) {
             OFF_ROUTE_METERS_WALKING
@@ -722,9 +851,29 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun updateSmoothedBearing(location: Location): Float? {
 
+        compass.updateLocation(location.latitude, location.longitude, location.altitude)
+
+        // Fast and precise: trust the direction of travel (the compass is
+        // also unreliable inside a car, next to the engine and metal).
+        val preciseCourse = !location.hasBearingAccuracy() ||
+            location.bearingAccuracyDegrees <= GPS_COURSE_MAX_ERROR_DEGREES
+        val fastCourse = location.hasBearing() && location.hasSpeed() &&
+            location.speed >= GPS_COURSE_MIN_SPEED_MPS && preciseCourse
+        if (fastCourse) {
+            gpsCourseUntilMs = android.os.SystemClock.elapsedRealtime() + GPS_COURSE_HOLD_MS
+            return bearingSmoother.update(location.bearing)
+        }
+
+        // Walking or standing: the compass sets the arrow (onCompassHeading).
+        // Without a working compass, fall back to the slow GPS course.
+        if (compass.isAvailable && compass.isReliable) {
+            return bearingSmoother.current()
+        }
+
         val hasReliableBearing = location.hasBearing() &&
             location.hasSpeed() &&
-            location.speed >= MIN_BEARING_SPEED_METERS_PER_SECOND
+            location.speed >= MIN_BEARING_SPEED_METERS_PER_SECOND &&
+            preciseCourse
 
         if (!hasReliableBearing) {
             return bearingSmoother.current()
@@ -824,6 +973,11 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
         val currentState = _uiState.value
 
+        if (!TravelModes.isAvailable(currentState.travelMode)) {
+            showTravelModeUnavailable()
+            return
+        }
+
         val geofence = currentState.geofence ?: return
 
         val userLatitude = currentState.userLatitude ?: return
@@ -881,7 +1035,12 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                     entranceName = directionsResult.destination
                         ?.takeIf { it.isVerifiedEntrance }?.entrance?.name,
                     routeNotice = directionsResult.warnings.firstOrNull(),
-                    routeAttribution = directionsResult.attribution
+                    routeAttribution = directionsResult.attribution,
+                    commuteSteps = if (currentState.travelMode == TravelMode.COMMUTE) {
+                        directionsResult.steps
+                    } else {
+                        emptyList()
+                    }
                 )
 
                 lastRoutedMode = currentState.travelMode
@@ -998,6 +1157,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             TravelMode.WALKING -> AVERAGE_WALKING_SPEED_METERS_PER_SECOND
             TravelMode.DRIVING -> AVERAGE_DRIVING_SPEED_METERS_PER_SECOND
             TravelMode.MOTORCYCLE -> AVERAGE_MOTORCYCLE_SPEED_METERS_PER_SECOND
+            TravelMode.COMMUTE -> AVERAGE_COMMUTE_SPEED_METERS_PER_SECOND
         }
 
         val etaMinutes = ceil(
@@ -1008,6 +1168,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             TravelMode.WALKING -> "walking"
             TravelMode.DRIVING -> "driving"
             TravelMode.MOTORCYCLE -> "motorcycle"
+            TravelMode.COMMUTE -> "commute"
         }
 
         secondsPerMeter = 1.0 / speedMetersPerSecond
@@ -1024,9 +1185,23 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             routeTargetLongitude = null,
             entranceName = null,
             routeAttribution = null,
+            commuteSteps = emptyList(),
             errorMessage = when (reason) {
                 com.histoury.app.data.repository.DirectionsFailure.NO_ROUTE ->
-                    "No $modeLabel route could be found to this place. " +
+                    if (mode == TravelMode.COMMUTE && com.histoury.app.map.MapConfig.useMapLibre) {
+                        // Commute on the OpenStreetMap map only knows mapped routes.
+                        "No mapped train, bus or jeepney route reaches within walking distance of your " +
+                            "starting point or this place. Not every route is in OpenStreetMap yet. " +
+                            "Distance and time are straight-line estimates."
+                    } else {
+                        "No $modeLabel route could be found to this place. " +
+                            "Distance and time are straight-line estimates."
+                    }
+                com.histoury.app.data.repository.DirectionsFailure.NOT_SET_UP ->
+                    "${modeLabel.replaceFirstChar { it.uppercase() }} directions aren't set up on the routing server yet. " +
+                        "Distance and time are straight-line estimates."
+                com.histoury.app.data.repository.DirectionsFailure.SERVER_NEEDS_UPDATE ->
+                    "The routing server needs an update before it can show $modeLabel routes on this map. " +
                         "Distance and time are straight-line estimates."
                 else ->
                     "Couldn't load a $modeLabel route. Check your connection and try again. " +

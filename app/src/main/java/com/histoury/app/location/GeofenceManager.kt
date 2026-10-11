@@ -15,13 +15,21 @@ import kotlin.coroutines.resumeWithException
 
 /**
  * How long a visitor must remain inside a fence before it counts as an
- * arrival.
+ * arrival (background detection; while the app is open [ArrivalWatcher]
+ * answers sooner).
  *
- * A minute is long enough that a single inaccurate fix cannot trigger it,
- * and short enough that somebody who has actually walked up to the gate is
- * not left waiting.
+ * Long enough that a single inaccurate fix cannot trigger it, short enough
+ * that somebody who has walked up to the gate is not left waiting. Was a
+ * minute, which on top of Android's own background delay felt broken.
  */
-private const val DWELL_DELAY_MS = 60_000
+private const val DWELL_DELAY_MS = 30_000
+
+/** Re-register unchanged fences after this long anyway, in case Play Services lost them. */
+private const val MAX_REGISTRATION_AGE_MS = 12 * 60 * 60_000L
+
+private const val PREFS_NAME = "histoury_geofences"
+private const val KEY_SIGNATURE = "signature"
+private const val KEY_REGISTERED_AT = "registered_at"
 
 class GeofenceManager(private val context: Context) {
 
@@ -42,8 +50,29 @@ class GeofenceManager(private val context: Context) {
         )
     }
 
+    private val prefs by lazy { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+
+    /**
+     * Registers [geofences] with Play Services.
+     *
+     * Skipped when exactly the same fences were already registered recently,
+     * unless [force] (after a reboot, or when Play Services dropped them).
+     *
+     * This matters more than it looks. Registering wipes Play Services'
+     * memory of which fences the phone is inside, and a fence only fires on
+     * a boundary crossing. Home used to re-register on nearly every visit,
+     * so a visitor standing inside a site who opened Home reset the fence
+     * and then got no arrival until they walked out and back in.
+     */
     @SuppressLint("MissingPermission")
-    suspend fun registerGeofences(geofences: List<Geofence>) {
+    suspend fun registerGeofences(geofences: List<Geofence>, force: Boolean = false) {
+
+        val signature = signatureOf(geofences)
+        val registeredAt = prefs.getLong(KEY_REGISTERED_AT, 0L)
+        val fresh = System.currentTimeMillis() - registeredAt in 0 until MAX_REGISTRATION_AGE_MS
+        if (!force && fresh && prefs.getString(KEY_SIGNATURE, null) == signature) {
+            return
+        }
 
         // Every caller passes the FULL current set of active geofences from
         // Firestore, never an incremental diff — so start from a clean
@@ -105,6 +134,25 @@ class GeofenceManager(private val context: Context) {
             .addGeofences(playGeofences)
             .build()
 
+        addGeofences(request)
+
+        prefs.edit()
+            .putString(KEY_SIGNATURE, signature)
+            .putLong(KEY_REGISTERED_AT, System.currentTimeMillis())
+            .apply()
+    }
+
+    /** Which fences, where and how big: a change in any of these means re-register. */
+    private fun signatureOf(geofences: List<Geofence>): String =
+        geofences
+            .filter { it.siteId.isNotBlank() }
+            .sortedBy { it.siteId }
+            .joinToString("|") { "${it.siteId}@${it.latitude},${it.longitude},${it.radius}" }
+            .let { "v2:$DWELL_DELAY_MS:$it" }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun addGeofences(request: GeofencingRequest) {
+
         suspendCancellableCoroutine<Unit> { continuation ->
 
             geofencingClient.addGeofences(request, geofencePendingIntent)
@@ -122,6 +170,9 @@ class GeofenceManager(private val context: Context) {
     }
 
     suspend fun removeAllGeofences() {
+
+        // Whatever was registered is gone, so the next register must not skip.
+        prefs.edit().remove(KEY_SIGNATURE).remove(KEY_REGISTERED_AT).apply()
 
         suspendCancellableCoroutine<Unit> { continuation ->
 

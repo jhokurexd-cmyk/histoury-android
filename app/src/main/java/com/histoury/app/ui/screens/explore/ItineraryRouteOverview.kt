@@ -25,10 +25,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.DirectionsTransit
 import androidx.compose.material.icons.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
@@ -40,6 +43,7 @@ import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.TwoWheeler
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -51,6 +55,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.animation.core.Spring
@@ -111,6 +116,9 @@ import com.histoury.app.ui.components.FieldErrorText
 import com.histoury.app.util.Validators
 import com.histoury.app.ui.components.rememberThemedMapColorScheme
 import com.histoury.app.ui.components.rememberThemedMapProperties
+import com.histoury.app.map.MapConfig
+import com.histoury.app.map.TravelModes
+import com.histoury.app.ui.map.ItineraryMapLibre
 import com.histoury.app.data.itinerary.ItineraryPlanner
 import com.histoury.app.data.model.ItineraryStatus
 import com.histoury.app.data.model.ItineraryStop
@@ -193,6 +201,12 @@ fun ItineraryRouteOverviewScreen(
     // refetches it, so applying every intermediate position would fire a
     // burst of Routes API calls for orders nobody chose.
     var draggedKey by remember { mutableStateOf<String?>(null) }
+
+    // Commute: which stop's "how to get here" directions are open.
+    var commuteStepsFor by remember { mutableStateOf<Int?>(null) }
+
+    // Commute steps for getting from here to the first stop.
+    var showApproachSteps by remember { mutableStateOf(false) }
     // Where the dragged card's top edge is drawn, in viewport pixels. Held
     // in absolute terms rather than as an offset from the card's slot, so a
     // swap (which moves the slot) or an auto-scroll (which moves the whole
@@ -401,6 +415,9 @@ fun ItineraryRouteOverviewScreen(
     // around the walls can extend well past the pins at either end.
     LaunchedEffect(uiState.generatedStops, uiState.routePath) {
 
+        // The MapLibre map frames the route itself (ItineraryMapLibre).
+        if (MapConfig.useMapLibre) return@LaunchedEffect
+
         val framePoints = uiState.routePath
             ?.points
             ?.takeIf { it.isNotEmpty() }
@@ -442,7 +459,11 @@ fun ItineraryRouteOverviewScreen(
             TutorialStep(
                 target = "route_mode",
                 title = "How you'll get around",
-                body = "Walk, drive or ride. Times and the route update to match."
+                body = if (TravelModes.available.size > 2) {
+                    "Walk, drive or ride. Times and the route update to match."
+                } else {
+                    "Walk or drive. Times and the route update to match."
+                }
             ),
             TutorialStep(
                 target = "route_summary",
@@ -530,6 +551,29 @@ fun ItineraryRouteOverviewScreen(
                 }
             }
 
+            // Car (and, on the Google map, motorcycle) trips: expressways /
+            // toll roads on or off for every leg.
+            if (uiState.travelMode == TravelMode.DRIVING ||
+                (uiState.travelMode == TravelMode.MOTORCYCLE && !com.histoury.app.map.MapConfig.useMapLibre)
+            ) {
+                item {
+                    val ctx = androidx.compose.ui.platform.LocalContext.current
+                    val avoid by com.histoury.app.data.repository.DriveOptions.avoidExpressways.collectAsState()
+                    com.histoury.app.ui.components.AvoidExpresswaysToggle(
+                        checked = avoid,
+                        onCheckedChange = { com.histoury.app.data.repository.DriveOptions.setAvoidExpressways(ctx, it) }
+                    )
+                }
+            }
+
+            // A saved mode that can't be routed yet stays selected; say so
+            // instead of quietly routing the trip as something else.
+            TravelModes.unavailableMessage(uiState.travelMode)?.let { message ->
+                item {
+                    ComingSoonModeBanner(message = message)
+                }
+            }
+
             item {
                 Box(Modifier.tutorialTarget("route_summary")) {
                     TripSummaryCard(
@@ -571,6 +615,19 @@ fun ItineraryRouteOverviewScreen(
                 )
             }
 
+            // Not in Intramuros yet: how to get from here to stop 1.
+            if (uiState.approachLeg != null || uiState.isLoadingApproach) {
+                item {
+                    GettingThereCard(
+                        leg = uiState.approachLeg,
+                        isLoading = uiState.isLoadingApproach,
+                        travelMode = uiState.travelMode,
+                        firstStopName = uiState.generatedStops.firstOrNull()?.name,
+                        onShowSteps = { showApproachSteps = true }
+                    )
+                }
+            }
+
             item { ReorderHintRow(isReordering = isReordering) }
 
             itemsIndexed(
@@ -589,6 +646,14 @@ fun ItineraryRouteOverviewScreen(
                     scheduled = scheduled,
                     startTimeMinutes = uiState.startTimeMinutes,
                     travelMode = uiState.travelMode,
+                    // Commute: the jeepney / bus / train steps of the leg
+                    // into this stop, for "Jeepney → Train ›".
+                    commuteSteps = if (uiState.travelMode == TravelMode.COMMUTE && !isReordering) {
+                        uiState.routePath?.legs?.firstOrNull { it.toIndex == index }?.steps.orEmpty()
+                    } else {
+                        emptyList()
+                    },
+                    onShowCommute = { commuteStepsFor = index },
                     isCompleted = scheduled.stop.status == StopStatus.COMPLETED,
                     // Walk legs and arrival times belong to an order that is
                     // still being decided, so they're withheld mid-drag
@@ -745,6 +810,38 @@ fun ItineraryRouteOverviewScreen(
         )
     }
 
+    if (showApproachSteps) {
+        val leg = uiState.approachLeg
+        val first = uiState.generatedStops.firstOrNull()
+        if (leg == null || first == null || leg.steps.isEmpty()) {
+            showApproachSteps = false
+        } else {
+            CommuteStepsSheet(
+                fromName = "Your location",
+                toName = first.name,
+                steps = leg.steps,
+                onDismiss = { showApproachSteps = false }
+            )
+        }
+    }
+
+    commuteStepsFor?.let { index ->
+        val stops = uiState.generatedStops
+        val leg = uiState.routePath?.legs?.firstOrNull { it.toIndex == index }
+        val to = stops.getOrNull(index)
+        val from = stops.getOrNull(index - 1)
+        if (leg == null || to == null || leg.steps.isEmpty()) {
+            commuteStepsFor = null
+        } else {
+            CommuteStepsSheet(
+                fromName = from?.name,
+                toName = to.name,
+                steps = leg.steps,
+                onDismiss = { commuteStepsFor = null }
+            )
+        }
+    }
+
     if (uiState.showAddStopSheet) {
         AddStopSheet(
             viewModel = viewModel,
@@ -774,7 +871,15 @@ private fun RouteMap(
             .aspectRatio(1.55f)
     ) {
 
-        GoogleMap(
+        if (MapConfig.useMapLibre) {
+            ItineraryMapLibre(
+                routePath = uiState.routePath,
+                stops = uiState.generatedStops,
+                approachLeg = uiState.approachLeg,
+                showUserLocation = uiState.approachLeg != null,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else GoogleMap(
             modifier = Modifier.fillMaxSize(),
             cameraPositionState = cameraPositionState,
             properties = rememberThemedMapProperties(),
@@ -1060,8 +1165,11 @@ private fun TravelModeSelector(
     val modes = listOf(
         Triple(TravelMode.WALKING, Icons.Default.DirectionsWalk, "Walk"),
         Triple(TravelMode.DRIVING, Icons.Default.DirectionsCar, "Drive"),
-        Triple(TravelMode.MOTORCYCLE, Icons.Default.TwoWheeler, "Ride")
-    )
+        Triple(TravelMode.MOTORCYCLE, Icons.Default.TwoWheeler, "Ride"),
+        Triple(TravelMode.COMMUTE, Icons.Default.DirectionsTransit, "Commute")
+    ).filter { (mode, _, _) -> mode in TravelModes.shownWith(selected) }
+    // Postponed modes aren't offered, except a saved one that is selected,
+    // which is shown (marked "Soon") so the trip's real mode stays visible.
 
     Row(
         modifier = Modifier
@@ -1100,12 +1208,51 @@ private fun TravelModeSelector(
                 Spacer(Modifier.width(5.dp))
 
                 Text(
-                    text = label,
-                    fontSize = 12.sp,
+                    text = if (TravelModes.isAvailable(mode)) label else "$label · Soon",
+                    fontSize = 11.5.sp,
+                    maxLines = 1,
                     fontWeight = FontWeight.Bold,
                     color = if (isSelected) Primary else TextSecondary
                 )
             }
+        }
+    }
+}
+
+/** Shown under the mode selector when the trip's saved mode is coming soon. */
+@Composable
+private fun ComingSoonModeBanner(message: String) {
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(PrimarySoft)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Icon(
+            imageVector = Icons.Default.Info,
+            contentDescription = null,
+            tint = Primary,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text(
+                text = "Coming Soon",
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                color = TextPrimary
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = "$message Travel times below are rough straight-line estimates, not directions.",
+                fontSize = 12.5.sp,
+                lineHeight = 17.sp,
+                color = TextPrimary,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Justify
+            )
         }
     }
 }
@@ -1260,6 +1407,7 @@ private fun ApproximateRouteNotice(
         TravelMode.WALKING -> "walking"
         TravelMode.DRIVING -> "driving"
         TravelMode.MOTORCYCLE -> "riding"
+        TravelMode.COMMUTE -> "commute"
     }
 
     Row(
@@ -1330,6 +1478,8 @@ private fun TimelineStop(
     isCompleted: Boolean,
     isReordering: Boolean,
     isDragged: Boolean,
+    commuteSteps: List<com.histoury.app.data.repository.RouteStep> = emptyList(),
+    onShowCommute: () -> Unit = {},
     dragOffsetY: () -> Float,
     onDragStart: () -> Unit,
     onDragBy: (Float) -> Unit,
@@ -1527,7 +1677,22 @@ private fun TimelineStop(
             // How to get here from the previous stop — the one number that
             // matters while walking the route. Always one line, so every
             // card is the same shape.
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // Commute: which rides, and a tap opens the step-by-step
+            // directions (which jeepney, where to get on and off).
+            val rides = com.histoury.app.ui.components.commuteRideSummary(commuteSteps)
+            val canShowSteps = index > 0 && !isReordering && commuteSteps.isNotEmpty()
+
+            Row(
+                modifier = if (canShowSteps) {
+                    Modifier.clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClickLabel = "Show commute directions",
+                        onClick = onShowCommute
+                    )
+                } else Modifier,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
 
                 Icon(
                     imageVector = if (index == 0) {
@@ -1537,6 +1702,7 @@ private fun TimelineStop(
                             TravelMode.WALKING -> Icons.Default.DirectionsWalk
                             TravelMode.DRIVING -> Icons.Default.DirectionsCar
                             TravelMode.MOTORCYCLE -> Icons.Default.TwoWheeler
+                            TravelMode.COMMUTE -> Icons.Default.DirectionsTransit
                         }
                     },
                     contentDescription = null,
@@ -1550,13 +1716,29 @@ private fun TimelineStop(
                     text = when {
                         index == 0 -> "First stop"
                         isReordering -> "Recalculating\u2026"
-                        else -> travelSummary(scheduled, travelMode)
+                        else -> travelSummary(
+                            scheduled,
+                            travelMode,
+                            // Walking was quicker than any ride for this leg.
+                            walkOnly = canShowSteps && rides == null
+                        ) + (rides?.let { " \u00b7 $it" } ?: "")
                     },
                     fontSize = 11.sp,
-                    color = TextTertiary,
+                    color = if (canShowSteps) Primary else TextTertiary,
+                    fontWeight = if (canShowSteps) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
+
+                if (canShowSteps) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = Primary,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
         }
 
@@ -1602,11 +1784,16 @@ private fun TimelineStop(
 }
 
 /** "6 min walk · 450 m", with "~" and "est." when the leg has no real route. */
-private fun travelSummary(scheduled: ItineraryPlanner.ScheduledStop, travelMode: TravelMode): String {
-    val verb = when (travelMode) {
+private fun travelSummary(
+    scheduled: ItineraryPlanner.ScheduledStop,
+    travelMode: TravelMode,
+    walkOnly: Boolean = false
+): String {
+    val verb = if (walkOnly) "walk" else when (travelMode) {
         TravelMode.WALKING -> "walk"
         TravelMode.DRIVING -> "drive"
         TravelMode.MOTORCYCLE -> "ride"
+        TravelMode.COMMUTE -> "commute"
     }
     return buildString {
         if (scheduled.travelIsApproximate) append("~")
@@ -1994,7 +2181,8 @@ private fun AddStopSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 520.dp)
+                // Tall enough to browse; the search and chips sit on top.
+                .heightIn(max = 640.dp)
                 .padding(bottom = 24.dp)
         ) {
 
@@ -2009,60 +2197,132 @@ private fun AddStopSheet(
             Spacer(Modifier.height(3.dp))
 
             Text(
-                text = "Tap a stop for details \u2022 tap + to add it",
+                text = "Tap for details \u2022 + to add",
                 fontSize = 11.5.sp,
                 color = TextSecondary,
                 modifier = Modifier.padding(horizontal = 20.dp)
             )
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(4.dp))
 
-            val availableSites = uiState.allSites.filter { it.documentId !in existingStopIds }
-            val availablePlaces = uiState.allPlaces.filter { it.documentId !in existingStopIds }
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val userPosition by com.histoury.app.util.UserDistance.position.collectAsState()
+            LaunchedEffect(Unit) { com.histoury.app.util.UserDistance.refresh(context) }
+
+            var query by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
+            var sort by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(BuilderSort.NEAREST) }
+            var group by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+
+            // Sites and every kind of place in one list, so the chips can
+            // filter by type and search/sort treat them alike. Anything
+            // already in the trip is left out.
+            val options = remember(uiState.allSites, uiState.allPlaces, existingStopIds) {
+                uiState.allSites
+                    .filter { it.documentId !in existingStopIds && it.latitude != null && it.longitude != null }
+                    .map { site ->
+                        AddStopOption(
+                            id = site.documentId, isSite = true, group = SITES_GROUP,
+                            title = site.siteName, typeLabel = "\uD83C\uDFDB\uFE0F Historical Site",
+                            location = site.location, description = site.description,
+                            imageUrl = site.featuredImage, latitude = site.latitude, longitude = site.longitude
+                        )
+                    } +
+                    uiState.allPlaces
+                        .filter { it.documentId !in existingStopIds && it.latitude != null && it.longitude != null }
+                        .map { place ->
+                            AddStopOption(
+                                id = place.documentId, isSite = false, group = placeCategoryGroup(place.category),
+                                title = place.name, typeLabel = "${place.categoryEmoji} ${place.categoryLabel}",
+                                location = place.location, description = place.description,
+                                imageUrl = place.featuredImage, latitude = place.latitude, longitude = place.longitude
+                            )
+                        }
+            }
+
+            val chips = remember(options) {
+                buildList {
+                    val siteCount = options.count { it.isSite }
+                    if (siteCount > 0) {
+                        add(BuilderCategoryChip(SITES_GROUP, "Historical Sites", Icons.Default.AccountBalance, siteCount))
+                    }
+                    com.histoury.app.ui.components.ContentCategory.entries
+                        .filter { it.key != "all" && it.key != "sites" }
+                        .forEach { option ->
+                            val count = options.count { !it.isSite && it.group == option.key }
+                            if (count > 0) add(BuilderCategoryChip(option.key, option.label, option.icon, count))
+                        }
+                }
+            }
+            val activeGroup = group?.takeIf { key -> chips.any { it.key == key } }
+
+            val shown = remember(options, query, sort, activeGroup, userPosition) {
+                builderFilterAndSort(
+                    items = options.filter { activeGroup == null || it.group == activeGroup },
+                    query = query,
+                    sort = sort,
+                    from = userPosition,
+                    name = { it.title },
+                    latitude = { it.latitude },
+                    longitude = { it.longitude },
+                    location = { it.location },
+                    description = { it.description }
+                )
+            }
+
+            BuilderListControls(
+                query = query,
+                onQueryChange = { query = it },
+                placeholder = "Search sites and places...",
+                sort = sort,
+                onSortChange = { sort = it },
+                hasLocation = userPosition != null,
+                resultCount = shown.size,
+                categories = chips,
+                selectedCategory = activeGroup,
+                onCategoryChange = { group = it },
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
+
+            Spacer(Modifier.height(10.dp))
 
             LazyColumn(
                 contentPadding = PaddingValues(horizontal = 20.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
 
-                items(availableSites.size) { index ->
-                    val site = availableSites[index]
+                items(shown.size) { index ->
+                    val option = shown[index]
+                    val distance = com.histoury.app.util.UserDistance.labelFor(option.latitude, option.longitude, userPosition)
                     AddStopRow(
-                        title = site.siteName,
-                        subtitle = site.location,
-                        imageUrl = site.featuredImage,
-                        onClick = { viewModel.addStopFromSite(site) },
+                        title = option.title,
+                        subtitle = listOfNotNull(option.typeLabel, distance?.let { if (it == "Nearby") it else "$it away" })
+                            .joinToString("  \u00B7  "),
+                        imageUrl = option.imageUrl,
+                        onClick = {
+                            if (option.isSite) {
+                                uiState.allSites.firstOrNull { it.documentId == option.id }?.let { viewModel.addStopFromSite(it) }
+                            } else {
+                                uiState.allPlaces.firstOrNull { it.documentId == option.id }?.let { viewModel.addStopFromPlace(it) }
+                            }
+                        },
                         onInfoClick = {
                             viewModel.openStopPreview(
-                                refId = site.documentId,
-                                refType = "site",
+                                refId = option.id,
+                                refType = if (option.isSite) "site" else "place",
                                 mode = StopPreviewMode.ADD_TO_ROUTE
                             )
                         }
                     )
                 }
 
-                items(availablePlaces.size) { index ->
-                    val place = availablePlaces[index]
-                    AddStopRow(
-                        title = place.name,
-                        subtitle = place.categoryLabel,
-                        imageUrl = place.featuredImage,
-                        onClick = { viewModel.addStopFromPlace(place) },
-                        onInfoClick = {
-                            viewModel.openStopPreview(
-                                refId = place.documentId,
-                                refType = "place",
-                                mode = StopPreviewMode.ADD_TO_ROUTE
-                            )
-                        }
-                    )
-                }
-
-                if (availableSites.isEmpty() && availablePlaces.isEmpty()) {
+                if (shown.isEmpty()) {
                     items(1) {
                         Text(
-                            text = "Everything's already in this itinerary.",
+                            text = when {
+                                options.isEmpty() -> "Everything's already in this itinerary."
+                                query.isNotBlank() -> "Nothing matches \"$query\"."
+                                else -> "Nothing of this kind left to add."
+                            },
                             color = TextSecondary,
                             fontSize = 13.sp,
                             modifier = Modifier.padding(vertical = 20.dp)
@@ -2203,3 +2463,151 @@ private val AUTO_SCROLL_MAX_STEP = 12.dp
 
 /** Longest itinerary name accepted in Rename. */
 private const val ITINERARY_NAME_MAX = 60
+
+/** Filter key for historical sites in the Add-a-Stop chips. */
+private const val SITES_GROUP = "sites"
+
+/** A site or a place, flattened so the Add-a-Stop sheet can search, sort and filter them together. */
+private data class AddStopOption(
+    val id: String,
+    val isSite: Boolean,
+    val group: String,
+    val title: String,
+    val typeLabel: String,
+    val location: String,
+    val description: String,
+    val imageUrl: String,
+    val latitude: Double?,
+    val longitude: Double?
+)
+
+/**
+ * Commute directions from one stop to the next: each walk and each ride
+ * (which jeepney, bus or train, towards where, where to get on and off).
+ */
+@Composable
+private fun CommuteStepsSheet(
+    fromName: String?,
+    toName: String,
+    steps: List<com.histoury.app.data.repository.RouteStep>,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = CardSurface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 640.dp)
+                .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp)
+        ) {
+            Text(
+                text = "Getting to $toName",
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (fromName != null) {
+                Text(
+                    text = "From $fromName",
+                    fontSize = 12.sp,
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            com.histoury.app.ui.components.CommuteTimeline(steps, toName)
+        }
+    }
+}
+
+/**
+ * "Getting there": from where the visitor is now to the first stop, in the
+ * trip's travel mode. For commute, the rides it takes and a tap for the
+ * step-by-step (which bus, jeepney or train; where to get on and off).
+ */
+@Composable
+private fun GettingThereCard(
+    leg: com.histoury.app.data.routing.RouteLeg?,
+    isLoading: Boolean,
+    travelMode: TravelMode,
+    firstStopName: String?,
+    onShowSteps: () -> Unit
+) {
+    val hasSteps = travelMode == TravelMode.COMMUTE && leg != null && leg.steps.isNotEmpty() &&
+        !leg.isStraightLineFallback
+    val rides = if (hasSteps) com.histoury.app.ui.components.commuteRideSummary(leg!!.steps) else null
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(PrimarySoft)
+            .then(
+                if (hasSteps) Modifier.clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClickLabel = "Show directions",
+                    onClick = onShowSteps
+                ) else Modifier
+            )
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.MyLocation,
+            contentDescription = null,
+            tint = Primary,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Getting there" + (firstStopName?.let { " \u00b7 to $it" } ?: ""),
+                color = TextPrimary,
+                fontSize = 13.5.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = when {
+                    leg == null && isLoading -> "Finding the way from your location\u2026"
+                    leg == null -> "From your location"
+                    else -> buildString {
+                        if (leg.isStraightLineFallback) append("~")
+                        append(formatLegMinutes(leg.durationMinutes))
+                        append(" \u00b7 ")
+                        append(formatDistance(leg.distanceMeters.toDouble()))
+                        if (leg.isStraightLineFallback) append(" (est.)")
+                        rides?.let { append(" \u00b7 ").append(it) }
+                    }
+                },
+                color = if (hasSteps) Primary else TextSecondary,
+                fontSize = 12.sp,
+                fontWeight = if (hasSteps) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (isLoading && leg == null) {
+            CircularProgressIndicator(color = Primary, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+        } else if (hasSteps) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = Primary,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+/** "45 min", "1 h 20 min". */
+private fun formatLegMinutes(minutes: Int): String =
+    if (minutes < 60) "$minutes min" else "${minutes / 60} h ${minutes % 60} min"

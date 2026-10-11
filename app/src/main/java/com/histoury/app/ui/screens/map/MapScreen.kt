@@ -26,7 +26,10 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ConfirmationNumber
 import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.DirectionsBus
+import androidx.compose.material.icons.filled.DirectionsTransit
 import androidx.compose.material.icons.filled.DirectionsWalk
+import androidx.compose.material.icons.filled.Train
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Star
@@ -37,6 +40,20 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.animation.animateContentSize
+import androidx.compose.ui.draw.alpha
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import com.histoury.app.ui.components.FavoriteButtonStyle
@@ -64,6 +81,8 @@ import androidx.navigation.NavHostController
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.google.android.gms.maps.model.CameraPosition
+import com.google.android.gms.maps.model.Dot
+import com.google.android.gms.maps.model.Gap
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.LatLngBounds
 import com.google.maps.android.compose.CameraMoveStartedReason
@@ -79,6 +98,7 @@ import com.histoury.app.ui.components.rememberThemedMapProperties
 import com.histoury.app.ui.components.TurnOnLocationDialog
 import com.histoury.app.ui.components.rememberDeviceLocationEnabled
 import com.histoury.app.ui.components.rememberTurnOnLocation
+import com.histoury.app.data.repository.RouteStep
 import com.histoury.app.data.repository.TravelMode
 import com.histoury.app.data.repository.ItineraryRepository
 import com.histoury.app.data.itinerary.ActiveItineraryTrip
@@ -97,6 +117,9 @@ import com.histoury.app.theme.RatingStar
 import com.histoury.app.theme.TextPrimary
 import com.histoury.app.theme.TextSecondary
 import com.histoury.app.ui.components.PrimaryButton
+import com.histoury.app.map.MapConfig
+import com.histoury.app.map.TravelModes
+import com.histoury.app.ui.map.RoutePreviewMapLibre
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
 import kotlin.math.abs
@@ -249,6 +272,13 @@ fun MapScreen(
     LaunchedEffect(siteId) {
         ActiveItineraryTrip.rehydrate(itineraryRepository)
         tripProgress = ActiveItineraryTrip.progressFor(siteId)
+        // A stop of an active trip uses the trip's own travel mode; it used
+        // to always open in Walking, even for a trip planned by car. A mode
+        // that can't be routed yet is kept too: the sheet then says
+        // "Coming Soon" rather than quietly routing it as something else.
+        if (tripProgress != null) {
+            mapViewModel.setTravelMode(TravelModes.fromWire(ActiveItineraryTrip.travelModeWire))
+        }
     }
 
     fun confirmSkipStop() {
@@ -367,6 +397,8 @@ fun MapScreen(
     // starts while the camera is already moving).
     val isNavigatingNow by rememberUpdatedState(uiState.isNavigating)
     LaunchedEffect(navCameraPositionState) {
+        // MapLibre reports gestures itself (see NavigationMapLibre).
+        if (MapConfig.useMapLibre) return@LaunchedEffect
         snapshotFlow {
             navCameraPositionState.isMoving to navCameraPositionState.cameraMoveStartedReason
         }.collect { (moving, reason) ->
@@ -379,7 +411,7 @@ fun MapScreen(
 
     // "Show whole route": frame everything still ahead, plus the visitor.
     LaunchedEffect(isOverview) {
-        if (!isOverview) return@LaunchedEffect
+        if (!isOverview || MapConfig.useMapLibre) return@LaunchedEffect
         // With no route, frame the visitor and the destination instead.
         val points = uiState.remainingRoutePoints.ifEmpty { uiState.routePoints }.ifEmpty {
             listOfNotNull(uiState.geofence?.let { LatLng(it.latitude, it.longitude) })
@@ -408,6 +440,7 @@ fun MapScreen(
     var previewTouched by remember { mutableStateOf(false) }
 
     LaunchedEffect(cameraPositionState) {
+        if (MapConfig.useMapLibre) return@LaunchedEffect
         snapshotFlow {
             cameraPositionState.isMoving to cameraPositionState.cameraMoveStartedReason
         }.collect { (moving, reason) ->
@@ -416,6 +449,7 @@ fun MapScreen(
     }
 
     LaunchedEffect(siteLatLng) {
+        if (MapConfig.useMapLibre) return@LaunchedEffect
         if (siteLatLng != null && !uiState.isNavigating && uiState.routePoints.size < 2 && previewFittedFor == null) {
             // First frame: place it without animation (there's nothing to glide from).
             cameraPositionState.position = CameraPosition.fromLatLngZoom(siteLatLng, 16.5f)
@@ -423,6 +457,9 @@ fun MapScreen(
     }
 
     LaunchedEffect(uiState.routePoints) {
+
+        // The MapLibre preview frames its own route (RoutePreviewMapLibre).
+        if (MapConfig.useMapLibre) return@LaunchedEffect
 
         val routePoints = uiState.routePoints
         // Includes the travel mode: switching Walking -> Driving gives a
@@ -480,6 +517,8 @@ fun MapScreen(
     LaunchedEffect(uiState.isNavigating, isFollowing, isInPip) {
 
         if (!uiState.isNavigating || !(isFollowing || isInPip)) return@LaunchedEffect
+        // MapLibre runs its own follow loop (NavigationMapLibre).
+        if (MapConfig.useMapLibre) return@LaunchedEffect
 
         val startPosition = navCameraPositionState.position
         var shown = startPosition.target
@@ -623,7 +662,11 @@ fun MapScreen(
             onToggleMute = { mapViewModel.toggleVoiceMuted() },
             onEnterPip = { activity?.enterNavigationPip() },
             onEnd = { mapViewModel.stopNavigation() },
-            onSkipStop = { showSkipConfirmation = true }
+            onSkipStop = { showSkipConfirmation = true },
+            onUserGesture = {
+                isFollowing = false
+                isOverview = false
+            }
         )
 
     } else BottomSheetScaffold(
@@ -655,6 +698,7 @@ fun MapScreen(
                     mapViewModel.setTravelMode(mode)
                 },
                 onRetryRoute = { mapViewModel.retryRoute() },
+                onAvoidExpresswaysChange = { mapViewModel.setAvoidExpressways(it) },
                 onOpenInGoogleMaps = { openInGoogleMaps(context, uiState) },
                 locationServicesOn = locationServicesOn,
                 onTurnOnLocation = turnOnLocation,
@@ -671,7 +715,20 @@ fun MapScreen(
                 .padding(padding)
         ) {
 
-            GoogleMap(
+            if (MapConfig.useMapLibre) {
+                RoutePreviewMapLibre(
+                    uiState = uiState,
+                    siteLatLng = siteLatLng,
+                    modifier = Modifier.fillMaxSize(),
+                    topInsetDp = WindowInsets.safeDrawing.only(WindowInsetsSides.Top)
+                        .asPaddingValues().calculateTopPadding().value + 60f,
+                    // BottomSheetScaffold already ends this content area at the
+                    // sheet's peek height (its padding), so no extra bottom inset:
+                    // adding one again lifted the map credit ~300 dp up the screen,
+                    // leaving it floating near the top.
+                    bottomInsetDp = 0f
+                )
+            } else GoogleMap(
                 modifier = Modifier.fillMaxSize(),
                 cameraPositionState = cameraPositionState,
                 // Keeps the map's own My Location button and logo out from
@@ -692,7 +749,27 @@ fun MapScreen(
                 // Only a real route is drawn. When none could be found the
                 // points are empty (see MapViewModel.applyStraightLineFallback),
                 // so a straight line through buildings can never appear here.
-                if (uiState.routePoints.size >= 2 && !uiState.isRouteEstimated) {
+                val commuteParts = uiState.commuteSteps.filter { it.points.size >= 2 }
+                if (commuteParts.isNotEmpty() && !uiState.isRouteEstimated) {
+                    // Commute: walking parts dotted, each ride solid in its
+                    // line's own colour (falls back to Histoury coral).
+                    commuteParts.forEach { step ->
+                        if (step.isTransitRide) {
+                            Polyline(
+                                points = step.points,
+                                color = step.transit?.lineColor?.let { com.histoury.app.ui.components.transitLineColor(it) } ?: Primary,
+                                width = 12f
+                            )
+                        } else {
+                            Polyline(
+                                points = step.points,
+                                color = Primary,
+                                width = 9f,
+                                pattern = listOf(Dot(), Gap(14f))
+                            )
+                        }
+                    }
+                } else if (uiState.routePoints.size >= 2 && !uiState.isRouteEstimated) {
                     Polyline(
                         points = uiState.routePoints,
                         color = Primary,
@@ -763,7 +840,7 @@ fun MapScreen(
             ),
             TutorialStep(
                 target = "directions_mode",
-                title = "Walk, drive or ride",
+                title = if (TravelModes.available.size > 2) "Walk, drive or ride" else "Walk or drive",
                 body = "Pick how you're getting there. The route, distance and time change to match."
             ),
             TutorialStep(
@@ -860,14 +937,33 @@ private fun MapBottomSheetContent(
     onOpenInGoogleMaps: () -> Unit,
     canFavorite: Boolean,
     locationServicesOn: Boolean = true,
-    onTurnOnLocation: () -> Unit = {}
+    onTurnOnLocation: () -> Unit = {},
+    onAvoidExpresswaysChange: (Boolean) -> Unit = {}
 ) {
 
     val site = uiState.site
+    val avoidExpressways by com.histoury.app.data.repository.DriveOptions.avoidExpressways.collectAsState()
+
+    // Re-fetching a route that's already on screen (e.g. after flipping
+    // "Avoid expressways and tolls"): keep everything in place, just dimmed,
+    // instead of swapping it for "Calculating route..." and back. Swapping
+    // changed the sheet's height twice and made it jump.
+    val hasShownRoute = !uiState.isRouteEstimated &&
+        (uiState.routePoints.size >= 2 || uiState.commuteSteps.isNotEmpty())
+    val isRefreshing = uiState.isRouteLoading && hasShownRoute
+    val refreshAlpha = if (isRefreshing) 0.45f else 1f
+    val sheetScroll = rememberScrollState()
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            // Any height change that does happen (new route, new mode)
+            // animates instead of snapping.
+            .animateContentSize()
+            // A long commute plan is taller than the screen: once the sheet
+            // is fully open, the rest scrolls (the sheet's own drag still
+            // works through nested scrolling).
+            .verticalScroll(sheetScroll)
             .padding(horizontal = 20.dp)
             .padding(bottom = 24.dp)
     ) {
@@ -1028,11 +1124,25 @@ private fun MapBottomSheetContent(
             )
         }
 
+        // Car routes may use expressways (toll roads) unless the visitor
+        // switches them off. Motorcycle on the OpenStreetMap map always
+        // avoids them (motorcycles under 400 cc aren't allowed on them).
+        val showAvoidToggle = uiState.travelMode == TravelMode.DRIVING ||
+            (uiState.travelMode == TravelMode.MOTORCYCLE && !MapConfig.useMapLibre)
+        if (showAvoidToggle) {
+            Spacer(Modifier.height(10.dp))
+            com.histoury.app.ui.components.AvoidExpresswaysToggle(
+                checked = avoidExpressways,
+                onCheckedChange = onAvoidExpresswaysChange
+            )
+        }
+
         Spacer(Modifier.height(12.dp))
 
         Row(
             modifier = Modifier
                 .tutorialTarget("directions_stats")
+                .alpha(refreshAlpha)
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
                 .background(PrimarySoft)
@@ -1078,7 +1188,17 @@ private fun MapBottomSheetContent(
 
         val isNearby = (uiState.distanceMeters ?: Float.MAX_VALUE) < NEARBY_DISTANCE_METERS
 
-        if (uiState.isRouteLoading) {
+        val modeUnavailableMessage = TravelModes.unavailableMessage(uiState.travelMode)
+
+        if (modeUnavailableMessage != null) {
+
+            // The saved mode can't be routed yet. Say so; never show a
+            // different mode's route in its place.
+            Spacer(Modifier.height(12.dp))
+
+            ComingSoonNotice(message = modeUnavailableMessage)
+
+        } else if (uiState.isRouteLoading && !isRefreshing) {
 
             Spacer(Modifier.height(12.dp))
 
@@ -1140,6 +1260,8 @@ private fun MapBottomSheetContent(
                     color = TextPrimary,
                     fontSize = 12.5.sp,
                     lineHeight = 17.sp,
+                    textAlign = TextAlign.Justify,
+                    letterSpacing = 0.sp, // see JustifiedReading in SiteContentTabs.kt
                     modifier = Modifier.padding(end = 8.dp)
                 )
                 Row {
@@ -1158,7 +1280,9 @@ private fun MapBottomSheetContent(
             Text(
                 text = uiState.errorMessage,
                 color = Danger,
-                fontSize = 13.sp
+                fontSize = 13.sp,
+                textAlign = TextAlign.Justify,
+                letterSpacing = 0.sp // see JustifiedReading in SiteContentTabs.kt
             )
         } else if (!uiState.hasLocationPermission) {
 
@@ -1187,6 +1311,8 @@ private fun MapBottomSheetContent(
                     color = TextPrimary,
                     fontSize = 12.5.sp,
                     lineHeight = 17.sp,
+                    textAlign = TextAlign.Justify,
+                    letterSpacing = 0.sp, // see JustifiedReading in SiteContentTabs.kt
                     modifier = Modifier.padding(end = 8.dp)
                 )
                 TextButton(onClick = onTurnOnLocation) {
@@ -1195,22 +1321,37 @@ private fun MapBottomSheetContent(
             }
         }
 
-        if (!uiState.isRouteLoading && uiState.routePoints.size >= 2 && !uiState.isRouteEstimated) {
-            RouteDestinationNotes(
-                entranceName = uiState.entranceName,
-                notice = uiState.routeNotice,
-                attribution = uiState.routeAttribution
-            )
+        if ((!uiState.isRouteLoading || isRefreshing) &&
+            uiState.travelMode == TravelMode.COMMUTE &&
+            uiState.commuteSteps.isNotEmpty() && !uiState.isRouteEstimated
+        ) {
+            Column(Modifier.alpha(refreshAlpha)) {
+                com.histoury.app.ui.components.CommuteTimeline(uiState.commuteSteps, site?.siteName)
+            }
+        }
+
+        if ((!uiState.isRouteLoading || isRefreshing) && uiState.routePoints.size >= 2 && !uiState.isRouteEstimated) {
+            Column(Modifier.alpha(refreshAlpha)) {
+                RouteDestinationNotes(
+                    entranceName = uiState.entranceName,
+                    notice = uiState.routeNotice,
+                    attribution = uiState.routeAttribution
+                )
+            }
         }
 
         Spacer(Modifier.height(20.dp))
 
         Box(Modifier.tutorialTarget("directions_navigate")) {
             PrimaryButton(
-                text = if (uiState.isRouteLoading) "Calculating Route" else "Navigate",
+                text = when {
+                    modeUnavailableMessage != null -> "Coming Soon"
+                    uiState.isRouteLoading -> "Calculating Route"
+                    else -> "Navigate"
+                },
                 onClick = onStartNavigationClick,
-                enabled = uiState.geofence != null,
-                isLoading = uiState.isRouteLoading
+                enabled = uiState.geofence != null && modeUnavailableMessage == null,
+                isLoading = uiState.isRouteLoading && modeUnavailableMessage == null
             )
         }
     }
@@ -1231,11 +1372,17 @@ private fun TravelModeSelector(
         horizontalArrangement = Arrangement.SpaceEvenly
     ) {
 
-        TravelMode.entries.forEach { mode ->
+        // Modes that can be routed, plus the selected one if it's a saved
+        // mode that's coming soon (commute / motorcycle on the OpenStreetMap
+        // map; see FeatureFlags), so the trip's real mode stays visible.
+        TravelModes.shownWith(selectedMode).forEach { mode ->
 
             val isSelected = mode == selectedMode
+            val isAvailable = TravelModes.isAvailable(mode)
 
-            Row(
+            // Icon above the label: four modes side by side don't leave
+            // room for "Motorcycle" next to its icon on a phone.
+            Column(
                 modifier = Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(10.dp))
@@ -1245,27 +1392,66 @@ private fun TravelModeSelector(
                         selected = isSelected
                         role = Role.RadioButton
                     }
-                    .padding(vertical = 12.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
 
                 Icon(
                     imageVector = travelModeIcon(mode),
                     contentDescription = travelModeLabel(mode),
                     tint = if (isSelected) Primary else TextSecondary,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(20.dp)
                 )
 
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.height(3.dp))
 
                 Text(
-                    text = travelModeLabel(mode),
-                    fontSize = 12.sp,
+                    text = if (isAvailable) travelModeLabel(mode) else "${travelModeLabel(mode)} · Soon",
+                    fontSize = 11.5.sp,
+                    maxLines = 1,
                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                     color = if (isSelected) Primary else TextSecondary
                 )
             }
+        }
+    }
+}
+
+/** Shown instead of a route when the selected travel mode is coming soon. */
+@Composable
+private fun ComingSoonNotice(message: String) {
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(PrimarySoft)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Icon(
+            imageVector = Icons.Default.Info,
+            contentDescription = null,
+            tint = Primary,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text(
+                text = "Coming Soon",
+                color = TextPrimary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = message,
+                color = TextPrimary,
+                fontSize = 12.5.sp,
+                lineHeight = 17.sp,
+                textAlign = TextAlign.Justify,
+                letterSpacing = 0.sp // see JustifiedReading in SiteContentTabs.kt
+            )
         }
     }
 }
@@ -1296,12 +1482,24 @@ private fun RouteDestinationNotes(entranceName: String?, notice: String?, attrib
         Row(verticalAlignment = Alignment.Top) {
             Icon(Icons.Default.Info, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))
-            Text(text = notice, color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp)
+            Text(text = notice, color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp, textAlign = TextAlign.Justify, letterSpacing = 0.sp)
         }
     }
 
     if (attribution != null) {
-        Spacer(Modifier.height(4.dp))
+        // OpenStreetMap-based routes can use real walkways (e.g. the
+        // Esplanade along the Pasig) that Google's map doesn't draw, so the
+        // line can cross what looks like a blank area. Say so up front.
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "This route may use walkways that aren't drawn on the map.",
+            color = TextSecondary,
+            fontSize = 11.5.sp,
+            lineHeight = 15.sp,
+            textAlign = TextAlign.Justify,
+            letterSpacing = 0.sp // see JustifiedReading in SiteContentTabs.kt
+        )
+        Spacer(Modifier.height(2.dp))
         Text(text = attribution, color = TextSecondary, fontSize = 10.sp, lineHeight = 13.sp)
     }
 }
@@ -1310,12 +1508,14 @@ private fun travelModeIcon(mode: TravelMode) = when (mode) {
     TravelMode.WALKING -> Icons.Default.DirectionsWalk
     TravelMode.DRIVING -> Icons.Default.DirectionsCar
     TravelMode.MOTORCYCLE -> Icons.Default.TwoWheeler
+    TravelMode.COMMUTE -> Icons.Default.DirectionsTransit
 }
 
 private fun travelModeLabel(mode: TravelMode) = when (mode) {
     TravelMode.WALKING -> "Walk"
     TravelMode.DRIVING -> "Drive"
     TravelMode.MOTORCYCLE -> "Motorcycle"
+    TravelMode.COMMUTE -> "Commute"
 }
 
 private fun formatDistance(uiState: MapUiState): String {
@@ -1351,14 +1551,22 @@ private const val NEARBY_DISTANCE_METERS = 60f
  */
 internal fun openInGoogleMaps(context: Context, uiState: MapUiState) {
     val destination = uiState.geofence ?: return
-    val mode = when (uiState.travelMode) {
-        TravelMode.WALKING -> "w"
-        TravelMode.DRIVING -> "d"
-        TravelMode.MOTORCYCLE -> "l"
+    val navigationUri = when (uiState.travelMode) {
+        // Turn-by-turn has no transit mode; open transit directions instead.
+        TravelMode.COMMUTE ->
+            "https://www.google.com/maps/dir/?api=1&destination=${destination.latitude},${destination.longitude}&travelmode=transit"
+        else -> {
+            val mode = when (uiState.travelMode) {
+                TravelMode.DRIVING -> "d"
+                TravelMode.MOTORCYCLE -> "l"
+                else -> "w"
+            }
+            "google.navigation:q=${destination.latitude},${destination.longitude}&mode=$mode"
+        }
     }
     val navigation = android.content.Intent(
         android.content.Intent.ACTION_VIEW,
-        android.net.Uri.parse("google.navigation:q=${destination.latitude},${destination.longitude}&mode=$mode")
+        android.net.Uri.parse(navigationUri)
     ).setPackage("com.google.android.apps.maps")
     val generic = android.content.Intent(
         android.content.Intent.ACTION_VIEW,
