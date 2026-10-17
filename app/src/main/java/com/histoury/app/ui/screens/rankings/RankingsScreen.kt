@@ -1,5 +1,7 @@
 package com.histoury.app.ui.screens.rankings
 
+import com.histoury.app.theme.SheetSurface
+import com.histoury.app.theme.softShadow
 import com.histoury.app.navigation.safePopBackStack
 import com.histoury.app.navigation.navigateSafely
 import androidx.compose.foundation.background
@@ -269,7 +271,7 @@ fun RankingsScreen(
 
         ModalBottomSheet(
             onDismissRequest = { rankingsViewModel.closeSiteReviews() },
-            containerColor = CardSurface
+            containerColor = SheetSurface
         ) {
 
             SiteReviewsSheetContent(
@@ -345,7 +347,7 @@ private fun RankingRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(elevation = 3.dp, shape = RoundedCornerShape(20.dp))
+            .softShadow(elevation = 3.dp, shape = RoundedCornerShape(20.dp))
             .clip(RoundedCornerShape(20.dp))
             .background(CardSurface)
             .padding(10.dp),

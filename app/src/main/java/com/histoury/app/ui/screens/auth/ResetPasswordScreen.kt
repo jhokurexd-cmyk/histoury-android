@@ -1,5 +1,6 @@
 package com.histoury.app.ui.screens.auth
 
+import com.histoury.app.theme.softShadow
 import com.histoury.app.navigation.safePopBackStack
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -85,7 +86,7 @@ fun ResetPasswordScreen(
             Box(
                 modifier = Modifier
                     .size(38.dp)
-                    .shadow(elevation = 2.dp, shape = CircleShape)
+                    .softShadow(elevation = 2.dp, shape = CircleShape)
                     .clip(CircleShape)
                     .background(CardSurface)
                     .clickable(

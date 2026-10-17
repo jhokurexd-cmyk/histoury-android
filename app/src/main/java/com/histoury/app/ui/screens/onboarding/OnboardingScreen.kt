@@ -1,5 +1,6 @@
 package com.histoury.app.ui.screens.onboarding
 
+import com.histoury.app.theme.softShadow
 import com.histoury.app.navigation.navigateSafely
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -531,7 +532,7 @@ private fun OnboardingIllustration(
                     .offset(x = side * 0.03f)
                     .rotate(3f)
                     .size(width = cardWidth, height = cardHeight)
-                    .shadow(elevation = 10.dp, shape = RoundedCornerShape(24.dp))
+                    .softShadow(elevation = 10.dp, shape = RoundedCornerShape(24.dp))
                     .clip(RoundedCornerShape(24.dp))
                     .background(CardSurface)
                     .padding(side * 0.06f),
@@ -604,7 +605,7 @@ private fun HighlightChip(
 ) {
     Row(
         modifier = modifier
-            .shadow(elevation = 6.dp, shape = RoundedCornerShape(50))
+            .softShadow(elevation = 6.dp, shape = RoundedCornerShape(50))
             .clip(RoundedCornerShape(50))
             .background(CardSurface)
             .padding(start = 6.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),

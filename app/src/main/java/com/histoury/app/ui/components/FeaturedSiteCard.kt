@@ -1,5 +1,6 @@
 package com.histoury.app.ui.components
 
+import com.histoury.app.theme.softShadow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -48,7 +49,7 @@ fun FeaturedSiteCard(
             .fillMaxWidth()
             .height(200.dp)
             .pressScale(interactionSource)
-            .shadow(
+            .softShadow(
                 elevation = 8.dp,
                 shape = RoundedCornerShape(28.dp),
                 ambientColor = Primary.copy(alpha = 0.2f)

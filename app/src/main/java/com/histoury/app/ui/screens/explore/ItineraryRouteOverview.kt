@@ -2,6 +2,9 @@
 
 package com.histoury.app.ui.screens.explore
 
+import com.histoury.app.theme.SheetSurface
+import com.histoury.app.theme.overlayShadow
+import com.histoury.app.theme.softShadow
 import com.histoury.app.ui.tutorial.TutorialStep
 import com.histoury.app.ui.tutorial.TutorialTour
 import com.histoury.app.ui.tutorial.tutorialTarget
@@ -596,7 +599,11 @@ fun ItineraryRouteOverviewScreen(
                 }
             }
 
-            if (uiState.routeIsApproximate && !uiState.isLoadingRoutePath) {
+            // Not for a "coming soon" mode: the banner above already says why
+            // there's no route, and Retry can't help.
+            if (uiState.routeIsApproximate && !uiState.isLoadingRoutePath &&
+                TravelModes.isAvailable(uiState.travelMode)
+            ) {
                 item {
                     ApproximateRouteNotice(
                         unroutedLegs = uiState.routePath?.unroutedLegCount ?: 0,
@@ -622,7 +629,7 @@ fun ItineraryRouteOverviewScreen(
                         leg = uiState.approachLeg,
                         isLoading = uiState.isLoadingApproach,
                         travelMode = uiState.travelMode,
-                        firstStopName = uiState.generatedStops.firstOrNull()?.name,
+                        firstStopName = com.histoury.app.data.viewmodel.firstOpenStop(uiState.generatedStops)?.name,
                         onShowSteps = { showApproachSteps = true }
                     )
                 }
@@ -782,6 +789,28 @@ fun ItineraryRouteOverviewScreen(
                     showLeaveConfirm = false
                     viewModel.closeBuilder()
                 }) {
+                    Text("Discard", color = Danger)
+                }
+            }
+        )
+    }
+
+    // Back on a new route the visitor has edited: stepping back regenerates
+    // the route, so their added, removed or moved stops would be lost.
+    if (uiState.showDiscardEditsDialog) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissDiscardEdits() },
+            title = { Text("Discard your changes to this route?") },
+            text = {
+                Text("Going back rebuilds the route from your picks, so the stops you added, removed or moved here will be lost.")
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.dismissDiscardEdits() }) {
+                    Text("Keep editing", color = Primary, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.confirmDiscardEdits() }) {
                     Text("Discard", color = Danger)
                 }
             }
@@ -995,7 +1024,7 @@ private fun RouteMap(
                 .statusBarsPadding()
                 .padding(16.dp)
                 .size(44.dp)
-                .shadow(4.dp, CircleShape)
+                .overlayShadow(4.dp, CircleShape)
                 .clip(CircleShape)
                 .background(CardSurface)
                 .clickable(
@@ -1020,7 +1049,7 @@ private fun RouteMap(
         ) {
             Row(
                 modifier = Modifier
-                    .shadow(4.dp, RoundedCornerShape(50))
+                    .overlayShadow(4.dp, RoundedCornerShape(50))
                     .clip(RoundedCornerShape(50))
                     .background(CardSurface)
                     .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -1514,7 +1543,7 @@ private fun TimelineStop(
                 scaleX = lift
                 scaleY = lift
             }
-            .shadow(
+            .softShadow(
                 elevation = if (isDragged) 12.dp else 2.dp,
                 shape = RoundedCornerShape(16.dp)
             )
@@ -2175,7 +2204,7 @@ private fun AddStopSheet(
 
     ModalBottomSheet(
         onDismissRequest = { viewModel.closeAddStopSheet() },
-        containerColor = CardSurface
+        containerColor = SheetSurface
     ) {
 
         Column(
@@ -2494,7 +2523,7 @@ private fun CommuteStepsSheet(
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = CardSurface
+        containerColor = SheetSurface
     ) {
         Column(
             modifier = Modifier

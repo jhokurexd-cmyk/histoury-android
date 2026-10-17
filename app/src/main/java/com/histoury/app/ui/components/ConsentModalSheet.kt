@@ -2,6 +2,7 @@
 
 package com.histoury.app.ui.components
 
+import com.histoury.app.theme.SheetSurface
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -74,7 +75,7 @@ fun ConsentModalSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = CardSurface,
+        containerColor = SheetSurface,
         dragHandle = null
     ) {
 

@@ -2,6 +2,7 @@
 
 package com.histoury.app.ui.screens.explore
 
+import com.histoury.app.theme.SheetSurface
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -297,7 +298,7 @@ private fun PreviewLoadingSheet(onDismiss: () -> Unit) {
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = CardSurface
+        containerColor = SheetSurface
     ) {
         Box(
             modifier = Modifier
@@ -326,7 +327,7 @@ internal fun StopPreviewSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = CardSurface
+        containerColor = SheetSurface
     ) {
 
         Column(

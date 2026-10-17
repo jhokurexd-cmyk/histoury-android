@@ -1,5 +1,6 @@
 package com.histoury.app.ui.screens.profile
 
+import com.histoury.app.theme.SheetSurface
 import com.histoury.app.navigation.safePopBackStack
 import com.histoury.app.navigation.navigateSafely
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -100,6 +101,8 @@ fun ProfileScreen(
     LaunchedEffect(uiState.updateSuccessMessage) {
         uiState.updateSuccessMessage?.let {
             Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+            // Shown once; coming back to Profile or rotating used to repeat it.
+            profileViewModel.consumeSuccessMessage()
         }
     }
 
@@ -107,6 +110,7 @@ fun ProfileScreen(
         val message = uiState.updateErrorMessage
         if (message != null && uiState.activeDialog == ProfileDialog.NONE) {
             Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            profileViewModel.consumeErrorMessage()
         }
     }
 
@@ -392,7 +396,7 @@ private fun ProfileDialogFrame(
     ) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = CardSurface,
+            color = SheetSurface,
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
@@ -442,11 +446,20 @@ private fun ProfileDialogFrame(
 @Composable
 private fun EditNameDialog(uiState: ProfileUiState, viewModel: ProfileViewModel) {
 
-    // Prefill from the current name: last word is the last name, the rest
-    // is the first name (handles two-word first names like "Juan Carlos").
+    // Prefill from the stored first and last name. Only when those aren't
+    // known (an older account) is the full name split: last word is the
+    // last name, the rest is the first name.
     val parts = remember { uiState.displayName.trim().split(Regex("\\s+")).filter { it.isNotBlank() } }
-    var firstName by remember { mutableStateOf(if (parts.size > 1) parts.dropLast(1).joinToString(" ") else parts.firstOrNull().orEmpty()) }
-    var lastName by remember { mutableStateOf(if (parts.size > 1) parts.last() else "") }
+    val hasStored = uiState.firstName.isNotBlank() || uiState.lastName.isNotBlank()
+    var firstName by remember {
+        mutableStateOf(
+            if (hasStored) uiState.firstName
+            else if (parts.size > 1) parts.dropLast(1).joinToString(" ") else parts.firstOrNull().orEmpty()
+        )
+    }
+    var lastName by remember {
+        mutableStateOf(if (hasStored) uiState.lastName else if (parts.size > 1) parts.last() else "")
+    }
 
     // Second step: an explicit "are you sure" before the change is saved,
     // since saving starts the 30-day cooldown.

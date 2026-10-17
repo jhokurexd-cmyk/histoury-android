@@ -1,5 +1,6 @@
 package com.histoury.app.ui.components
 
+import com.histoury.app.theme.softShadow
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -77,7 +78,7 @@ fun PopularSiteCard(
             .width(230.dp)
             .height(210.dp)
             .pressScale(cardInteractionSource)
-            .shadow(elevation = 6.dp, shape = RoundedCornerShape(24.dp))
+            .softShadow(elevation = 6.dp, shape = RoundedCornerShape(24.dp))
             .clip(RoundedCornerShape(24.dp))
             .background(CardSurface)
             .clickable(

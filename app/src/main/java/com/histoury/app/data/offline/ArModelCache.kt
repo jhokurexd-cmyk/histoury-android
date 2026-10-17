@@ -86,7 +86,12 @@ object ArModelCache {
     suspend fun get(context: Context, url: String, siteId: String? = null): File {
 
         val cachedFile = fileFor(context, url)
-        if (withContext(Dispatchers.IO) { OfflineStore.isValidGlb(cachedFile) }) return cachedFile
+        if (withContext(Dispatchers.IO) { OfflineStore.isValidGlb(cachedFile) }) {
+            // Marks it recently used, so the storage sweep's size cap
+            // (OfflineSiteManager.sweepStorageOnce) removes other models first.
+            withContext(Dispatchers.IO) { runCatching { cachedFile.setLastModified(System.currentTimeMillis()) } }
+            return cachedFile
+        }
 
         val downloaded = withContext(Dispatchers.IO) { OfflineSiteManager.localModelFor(context, siteId) }
         if (downloaded != null) return downloaded

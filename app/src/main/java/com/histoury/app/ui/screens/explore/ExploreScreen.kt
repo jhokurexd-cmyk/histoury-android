@@ -1,5 +1,6 @@
 package com.histoury.app.ui.screens.explore
 
+import com.histoury.app.theme.softShadow
 import com.histoury.app.navigation.Routes
 import com.histoury.app.ui.tutorial.TutorialStep
 import com.histoury.app.ui.tutorial.TutorialTour
@@ -367,7 +368,7 @@ fun ExploreScreen(
                     Box(
                         modifier = Modifier
                             .size(38.dp)
-                            .shadow(elevation = 2.dp, shape = CircleShape)
+                            .softShadow(elevation = 2.dp, shape = CircleShape)
                             .clip(CircleShape)
                             .background(CardSurface)
                             .clickable(
@@ -643,7 +644,7 @@ private fun SavedItineraryCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(elevation = 3.dp, shape = RoundedCornerShape(20.dp))
+            .softShadow(elevation = 3.dp, shape = RoundedCornerShape(20.dp))
             .clip(RoundedCornerShape(20.dp))
             .background(CardSurface)
             .then(
@@ -880,7 +881,7 @@ internal fun WizardStepHeader(
             Box(
                 modifier = Modifier
                     .size(38.dp)
-                    .shadow(elevation = 2.dp, shape = CircleShape)
+                    .softShadow(elevation = 2.dp, shape = CircleShape)
                     .clip(CircleShape)
                     .background(CardSurface)
                     .clickable(

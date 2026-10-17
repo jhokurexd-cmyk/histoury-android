@@ -115,8 +115,14 @@ class VisitHistoryViewModel : ViewModel() {
                 .mapNotNull { visit -> sitesByKey[visit.siteId]?.let { site -> site to visit } }
                 .groupBy({ it.first.documentId }, { it })
                 .mapValues { (_, pairs) ->
-                    pairs.maxByOrNull { (_, visit) ->
+                    val latest = pairs.maxByOrNull { (_, visit) ->
                         (visit.visitDate as? Timestamp)?.toDate()?.time ?: 0L
+                    }
+                    // Reviewed on ANY visit counts: a revisit used to bring
+                    // "Leave a Review" back for a site already reviewed.
+                    val reviewedBefore = pairs.any { (_, visit) -> visit.reviewSubmitted }
+                    latest?.let { (site, visit) ->
+                        site to if (reviewedBefore) visit.copy(reviewSubmitted = true) else visit
                     }
                 }
 

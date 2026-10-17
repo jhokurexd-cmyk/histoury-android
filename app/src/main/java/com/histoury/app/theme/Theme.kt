@@ -35,6 +35,8 @@ enum class ThemeMode {
 @Composable
 fun HistouryTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
+    // Menu > Theme. Changes the surfaces only; the coral and text stay.
+    uiStyle: UiStyle = UiStyle.DEFAULT,
     content: @Composable () -> Unit
 ) {
 
@@ -44,7 +46,11 @@ fun HistouryTheme(
         ThemeMode.DARK -> true
     }
 
-    val colors = if (useDark) DarkHistouryColors else LightHistouryColors
+    val colors = when (uiStyle) {
+        UiStyle.DEFAULT -> if (useDark) DarkHistouryColors else LightHistouryColors
+        UiStyle.NEUMORPHIC -> if (useDark) NeumorphicDarkColors else NeumorphicLightColors
+        UiStyle.GLASS -> if (useDark) GlassDarkColors else GlassLightColors
+    }
 
     // Material's own scheme is kept in step with ours. The app draws almost
     // everything from HistouryColors directly, but Material components it
@@ -78,7 +84,10 @@ fun HistouryTheme(
         )
     }
 
-    CompositionLocalProvider(LocalHistouryColors provides colors) {
+    CompositionLocalProvider(
+        LocalHistouryColors provides colors,
+        LocalUiStyle provides uiStyle
+    ) {
         MaterialTheme(
             colorScheme = materialScheme,
             typography = Typography,

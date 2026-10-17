@@ -2,6 +2,7 @@
 
 package com.histoury.app.ui.screens.sitelibrary
 
+import com.histoury.app.theme.softShadow
 import com.histoury.app.navigation.safePopBackStack
 import com.histoury.app.navigation.navigateSafely
 import androidx.compose.foundation.background
@@ -113,7 +114,7 @@ fun SiteLibraryScreen(
                 Box(
                     modifier = Modifier
                         .size(38.dp)
-                        .shadow(elevation = 2.dp, shape = CircleShape)
+                        .softShadow(elevation = 2.dp, shape = CircleShape)
                         .clip(CircleShape)
                         .background(CardSurface)
                         .clickable(
@@ -230,7 +231,7 @@ private fun SiteLibraryCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(elevation = 5.dp, shape = RoundedCornerShape(20.dp))
+            .softShadow(elevation = 5.dp, shape = RoundedCornerShape(20.dp))
             .clip(RoundedCornerShape(20.dp))
             .background(CardSurface)
             .clickable(

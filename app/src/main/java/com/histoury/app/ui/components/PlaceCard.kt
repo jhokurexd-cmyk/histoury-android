@@ -1,5 +1,6 @@
 package com.histoury.app.ui.components
 
+import com.histoury.app.theme.styledElevation
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -59,7 +60,7 @@ fun PlaceCard(
     Surface(
         shape = RoundedCornerShape(20.dp),
         color = CardSurface,
-        shadowElevation = 3.dp,
+        shadowElevation = styledElevation(3.dp),
         modifier = Modifier
             .fillMaxWidth()
             .pressScale(interactionSource)

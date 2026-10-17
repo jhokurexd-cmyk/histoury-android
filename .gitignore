@@ -15,3 +15,11 @@
 local.properties
 
 .agents/
+
+# Local build outputs and scratch files
+/app/release/
+*.zip
+*.bundle
+/Claude outputs/
+/postman/
+/.postman/

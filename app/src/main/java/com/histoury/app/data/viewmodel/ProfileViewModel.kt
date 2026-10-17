@@ -1,7 +1,8 @@
 package com.histoury.app.data.viewmodel
 
 import android.net.Uri
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -23,6 +24,10 @@ enum class ProfileDialog {
 data class ProfileUiState(
     val isLoading: Boolean = false,
     val displayName: String = "",
+    // As stored, so Edit Name fills both boxes correctly ("Juan Carlos" /
+    // "Dela Cruz") instead of guessing from the full name.
+    val firstName: String = "",
+    val lastName: String = "",
     val email: String = "",
     val photoUrl: String = "",
     val memberSince: String = "--",
@@ -41,7 +46,7 @@ data class ProfileUiState(
     val emailChangeComplete: Boolean = false
 )
 
-class ProfileViewModel : ViewModel() {
+class ProfileViewModel(application: Application) : AndroidViewModel(application) {
 
     private val firebaseAuth = FirebaseAuth.getInstance()
 
@@ -84,6 +89,8 @@ class ProfileViewModel : ViewModel() {
             var finalDisplayName = authDisplayName
             var finalPhotoUrl = authPhotoUrl
             var memberSince = "--"
+            var storedFirstName: String? = null
+            var storedLastName: String? = null
 
             try {
 
@@ -94,6 +101,8 @@ class ProfileViewModel : ViewModel() {
                     val firstName = userDoc.getString("firstName") ?: ""
                     val lastName = userDoc.getString("lastName") ?: ""
                     val fullName = "$firstName $lastName".trim()
+                    storedFirstName = firstName
+                    storedLastName = lastName
 
                     if (fullName.isNotBlank()) {
                         finalDisplayName = fullName
@@ -124,7 +133,15 @@ class ProfileViewModel : ViewModel() {
 
             // Run together rather than one after another.
             val visitedDeferred = async { countDistinctSitesVisited(uid) }
-            val photosDeferred = async { countDocuments("gallery", uid) }
+            // Photos are saved on the phone now (older ones in the cloud);
+            // counting only the cloud collection showed 0 for new photos.
+            val photosDeferred = async {
+                runCatching {
+                    com.histoury.app.data.repository.GalleryRepository()
+                        .getGalleryForCurrentUser(getApplication())
+                        .size
+                }.getOrDefault(0)
+            }
             val reviewsDeferred = async { countDocuments("reviews", uid) }
 
             val visitedCount = visitedDeferred.await()
@@ -136,6 +153,8 @@ class ProfileViewModel : ViewModel() {
             _uiState.value = _uiState.value.copy(
                 isLoading = false,
                 displayName = finalDisplayName,
+                firstName = storedFirstName ?: _uiState.value.firstName,
+                lastName = storedLastName ?: _uiState.value.lastName,
                 photoUrl = finalPhotoUrl,
                 memberSince = memberSince,
                 sitesVisitedCount = visitedCount,
@@ -217,6 +236,15 @@ class ProfileViewModel : ViewModel() {
             otpInfoMessage = null,
             pendingNewEmail = ""
         )
+    }
+
+    /** The toast for these was shown; don't show it again on return. */
+    fun consumeSuccessMessage() {
+        _uiState.value = _uiState.value.copy(updateSuccessMessage = null)
+    }
+
+    fun consumeErrorMessage() {
+        _uiState.value = _uiState.value.copy(updateErrorMessage = null)
     }
 
     fun updateDisplayName(firstName: String, lastName: String) {

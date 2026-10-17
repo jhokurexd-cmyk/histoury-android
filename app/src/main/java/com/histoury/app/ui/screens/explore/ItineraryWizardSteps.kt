@@ -1,5 +1,6 @@
 package com.histoury.app.ui.screens.explore
 
+import com.histoury.app.theme.softShadow
 import com.histoury.app.ui.tutorial.TutorialStep
 import com.histoury.app.ui.tutorial.TutorialTour
 import com.histoury.app.ui.tutorial.tutorialTarget
@@ -259,7 +260,7 @@ private fun SelectableCard(
         modifier = Modifier
             .then(if (tutorialKey != null) Modifier.tutorialTarget(tutorialKey) else Modifier)
             .fillMaxWidth()
-            .shadow(elevation = 3.dp, shape = RoundedCornerShape(18.dp))
+            .softShadow(elevation = 3.dp, shape = RoundedCornerShape(18.dp))
             .clip(RoundedCornerShape(18.dp))
             .background(CardSurface)
             .then(
@@ -447,6 +448,14 @@ fun SelectInterestsStep(
                     .padding(20.dp)
             ) {
 
+                if (uiState.errorMessage != null) {
+                    AuthStatusBanner(
+                        message = uiState.errorMessage ?: "",
+                        isError = true
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
+
                 Box(Modifier.tutorialTarget("builder_interests_continue")) {
                     PrimaryButton(
                         text = if (uiState.selectedInterestCategories.isEmpty()) {
@@ -454,6 +463,11 @@ fun SelectInterestsStep(
                         } else {
                             "Find Recommendations"
                         },
+                        // Places are still loading (e.g. right after the app
+                        // was restored): going on now would find nothing and
+                        // drop the restored picks.
+                        isLoading = uiState.isLoadingCatalog || uiState.isGeneratingRoute,
+                        enabled = !uiState.isLoadingCatalog && !uiState.isGeneratingRoute,
                         onClick = {
                             if (uiState.selectedInterestCategories.isEmpty()) {
                                 viewModel.generateRoute()
@@ -525,6 +539,14 @@ fun RecommendationsStep(
                     .background(CardSurface)
                     .padding(20.dp)
             ) {
+
+                if (uiState.errorMessage != null) {
+                    AuthStatusBanner(
+                        message = uiState.errorMessage ?: "",
+                        isError = true
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
 
                 if (uiState.isGeneratingRoute) {
                     Box(
@@ -684,7 +706,7 @@ private fun PlacePickRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(elevation = 2.dp, shape = RoundedCornerShape(16.dp))
+            .softShadow(elevation = 2.dp, shape = RoundedCornerShape(16.dp))
             .clip(RoundedCornerShape(16.dp))
             .background(CardSurface)
             .then(

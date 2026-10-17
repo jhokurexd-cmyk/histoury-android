@@ -1,5 +1,9 @@
 package com.histoury.app.ui.screens.menu
 
+import com.histoury.app.theme.GlassDarkColors
+import com.histoury.app.theme.GlassLightColors
+import com.histoury.app.theme.SheetSurface
+import com.histoury.app.theme.styleBackdrop
 import androidx.compose.material.icons.filled.School
 import com.histoury.app.ui.tutorial.TutorialPreference
 import com.histoury.app.ui.tutorial.TutorialStep
@@ -66,6 +70,19 @@ import com.histoury.app.navigation.Routes
 import com.histoury.app.theme.Danger
 import com.histoury.app.theme.ThemeMode
 import com.histoury.app.theme.ThemePreference
+import com.histoury.app.theme.UiStyle
+import com.histoury.app.theme.LocalUiStyle
+import com.histoury.app.theme.LocalHistouryColors
+import com.histoury.app.theme.LightHistouryColors
+import com.histoury.app.theme.DarkHistouryColors
+import com.histoury.app.theme.NeumorphicLightColors
+import com.histoury.app.theme.NeumorphicDarkColors
+import com.histoury.app.theme.isDarkTheme
+import com.histoury.app.theme.neuRaised
+import com.histoury.app.theme.softInset
+import com.histoury.app.theme.softShadow
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.runtime.CompositionLocalProvider
 import com.histoury.app.theme.Outline as DividerColor
 import com.histoury.app.theme.TextSecondary
 import com.histoury.app.theme.TextPrimary as TextMain
@@ -90,6 +107,21 @@ fun MenuScreen(
     val favoriteCount = favoriteIds.size
 
     var showAppearanceSheet by remember { mutableStateOf(false) }
+
+    // Menu > Theme: Default or Neumorphism.
+    val uiStyle by ThemePreference.style.collectAsState()
+    var showThemeSheet by remember { mutableStateOf(false) }
+
+    if (showThemeSheet) {
+        ThemeStyleSheet(
+            current = uiStyle,
+            onSelect = { style ->
+                ThemePreference.setStyle(context, style)
+                showThemeSheet = false
+            },
+            onDismiss = { showThemeSheet = false }
+        )
+    }
 
     // Settings > Offline Downloads: "Download over" and automatic updates.
     var showDownloadSettings by remember { mutableStateOf(false) }
@@ -417,6 +449,17 @@ fun MenuScreen(
                     thickness = 0.5.dp
                 )
                 MenuItemRow(
+                    icon = Icons.Default.Palette,
+                    label = "Theme",
+                    secondaryText = uiStyle.label,
+                    onClick = { showThemeSheet = true }
+                )
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    color = DividerColor,
+                    thickness = 0.5.dp
+                )
+                MenuItemRow(
                     icon = Icons.Default.Download,
                     label = "Offline Downloads",
                     secondaryText = com.histoury.app.ui.components.downloadSettingsSummary(),
@@ -479,7 +522,10 @@ private fun MenuSection(
         )
 
         Surface(
-            modifier = Modifier.fillMaxWidth(),
+            // Lifts out of the page in Neumorphism; flat as before in Default.
+            modifier = Modifier
+                .fillMaxWidth()
+                .neuRaised(RoundedCornerShape(20.dp)),
             shape = RoundedCornerShape(20.dp),
             color = CardSurface
         ) {
@@ -515,7 +561,9 @@ private fun MenuItemRow(
             modifier = Modifier
                 .size(36.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(BackgroundGray),
+                .background(BackgroundGray)
+                // Pressed into the card in Neumorphism; no effect in Default.
+                .softInset(RoundedCornerShape(10.dp), depth = 3.dp),
             contentAlignment = Alignment.Center
         ) {
             Icon(
@@ -579,7 +627,7 @@ private fun AppearanceSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = CardSurface
+        containerColor = SheetSurface
     ) {
 
         Column(
@@ -656,6 +704,158 @@ private fun AppearanceSheet(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Theme picker: Default or Neumorphism.
+ *
+ * Works with Appearance rather than replacing it. Appearance answers
+ * "light or dark", Theme answers "what do the surfaces look like", so
+ * Neumorphism has both a light and a dark version.
+ *
+ * Each option shows a small preview drawn with that style's real palette
+ * and shadows, in the current light/dark mode, so the visitor sees what
+ * they're picking before they pick it. Like Appearance, it applies at once.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ThemeStyleSheet(
+    current: UiStyle,
+    onSelect: (UiStyle) -> Unit,
+    onDismiss: () -> Unit
+) {
+
+    val dark = isDarkTheme
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = SheetSurface
+    ) {
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp)
+        ) {
+
+            Text(
+                text = "Theme",
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextMain
+            )
+
+            Spacer(Modifier.height(4.dp))
+
+            Text(
+                text = "Choose the style of cards and buttons.",
+                fontSize = 12.5.sp,
+                color = TextSecondary
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            UiStyle.entries.forEach { style ->
+
+                val isSelected = style == current
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(if (isSelected) BackgroundGray else Color.Transparent)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { onSelect(style) }
+                        )
+                        .semantics { selected = isSelected }
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+
+                    ThemeStylePreview(style = style, dark = dark)
+
+                    Spacer(Modifier.width(14.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = style.label,
+                            fontSize = 15.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            color = TextMain
+                        )
+                        Text(
+                            text = style.description,
+                            fontSize = 12.sp,
+                            color = TextSecondary
+                        )
+                    }
+
+                    if (isSelected) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Selected",
+                            tint = PrimaryPink,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A tiny page with one card and one coral dot, drawn in [style]. */
+@Composable
+private fun ThemeStylePreview(style: UiStyle, dark: Boolean) {
+
+    val palette = when (style) {
+        UiStyle.DEFAULT -> if (dark) DarkHistouryColors else LightHistouryColors
+        UiStyle.NEUMORPHIC -> if (dark) NeumorphicDarkColors else NeumorphicLightColors
+        UiStyle.GLASS -> if (dark) GlassDarkColors else GlassLightColors
+    }
+
+    CompositionLocalProvider(
+        LocalHistouryColors provides palette,
+        LocalUiStyle provides style
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 64.dp, height = 48.dp)
+                .clip(RoundedCornerShape(12.dp))
+                // Glassmorphism's colour wash; nothing for the other styles.
+                .styleBackdrop()
+                .background(palette.surfaceSoft),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(
+                modifier = Modifier
+                    .size(width = 42.dp, height = 24.dp)
+                    .softShadow(elevation = 4.dp, shape = RoundedCornerShape(8.dp))
+                    .background(palette.surface)
+                    .padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(palette.primary)
+                )
+                Spacer(Modifier.width(4.dp))
+                Box(
+                    modifier = Modifier
+                        .height(4.dp)
+                        .weight(1f)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(palette.textTertiary.copy(alpha = 0.5f))
+                )
             }
         }
     }

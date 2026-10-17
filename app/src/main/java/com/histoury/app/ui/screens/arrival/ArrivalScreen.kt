@@ -1,5 +1,6 @@
 package com.histoury.app.ui.screens.arrival
 
+import com.histoury.app.theme.overlayShadow
 import com.histoury.app.ui.tutorial.TutorialStep
 import com.histoury.app.ui.tutorial.TutorialTour
 import com.histoury.app.ui.tutorial.tutorialTarget
@@ -144,14 +145,18 @@ fun ArrivalScreen(
 
     val context = LocalContext.current
 
-    // Arrival chime, once, when the site has loaded.
+    // Arrival chime, once, when the site has loaded. Remembered across
+    // coming back from Site Details or AR, and rotation, so it doesn't play
+    // again every time the screen reappears.
     val loadedSiteId = uiState.site?.documentId
+    var chimed by rememberSaveable(siteId) { mutableStateOf(false) }
 
     DisposableEffect(loadedSiteId) {
 
         var mediaPlayer: MediaPlayer? = null
 
-        if (loadedSiteId != null) {
+        if (loadedSiteId != null && !chimed) {
+            chimed = true
             val audioAttributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -289,7 +294,7 @@ fun ArrivalScreen(
                 .statusBarsPadding()
                 .padding(16.dp)
                 .size(44.dp)
-                .shadow(4.dp, CircleShape)
+                .overlayShadow(4.dp, CircleShape)
                 .clip(CircleShape)
                 .background(CardSurface)
                 .clickable {
@@ -398,7 +403,7 @@ private fun ArrivalCard(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(max = maxCardHeight)
-            .shadow(16.dp, RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+            .overlayShadow(16.dp, RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
             .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
             .background(CardSurface)
             .navigationBarsPadding()

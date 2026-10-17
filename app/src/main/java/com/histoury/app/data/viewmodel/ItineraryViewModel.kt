@@ -184,7 +184,13 @@ data class ItineraryUiState(
     /** Neutral feedback, e.g. the result of "Optimize Order". Auto-dismissed by the UI. */
     val infoMessage: String? = null,
 
-    val showAddStopSheet: Boolean = false
+    val showAddStopSheet: Boolean = false,
+
+    /**
+     * Back was pressed on a new, unsaved route the visitor has edited (added,
+     * removed or moved stops). Going back regenerates the route, so ask first.
+     */
+    val showDiscardEditsDialog: Boolean = false
 ) {
 
     /** Walking plus time on site — what the trip actually costs the visitor. */
@@ -248,14 +254,53 @@ class ItineraryViewModel(
      */
     private var preservedSavedTravelMode: String? = null
 
+    /**
+     * The stops part of [savedFingerprint] (order and visit lengths). Kept
+     * on its own so we can tell "the visitor edited the stops here" apart
+     * from other unsaved edits such as a rename.
+     */
+    private var savedStopsFingerprint: String? = null
+
+    /**
+     * The stops of a new route exactly as [generateRoute] built them. Null
+     * for a saved itinerary. Back from the overview compares against it to
+     * know whether stepping back would throw away the visitor's own edits.
+     */
+    private var generatedStopsSnapshot: List<String>? = null
+
+    private fun stopsFingerprint(stops: List<ItineraryStop>): String = buildString {
+        stops.forEach { stop ->
+            append('|').append(stop.refType).append(':').append(stop.refId)
+            append('@').append(stop.estimatedVisitMinutes)
+        }
+    }
+
+    // Header first, stops last: rebaseSavedStops relies on the stops part
+    // being the suffix.
     private fun fingerprint(state: ItineraryUiState): String = buildString {
         append(state.itineraryName.trim()).append('|')
         append(state.travelMode.wireValue).append('|')
         append(state.startTimeMinutes)
-        state.generatedStops.forEach { stop ->
-            append('|').append(stop.refType).append(':').append(stop.refId)
-            append('@').append(stop.estimatedVisitMinutes)
-        }
+        append(stopsFingerprint(state.generatedStops))
+    }
+
+    /** Records [state] as what's saved (after a load or a successful save). */
+    private fun markSaved(state: ItineraryUiState) {
+        savedFingerprint = fingerprint(state)
+        savedStopsFingerprint = stopsFingerprint(state.generatedStops)
+    }
+
+    /**
+     * The saved stop list changed on the server (Arrival's "Optimize Route")
+     * and we took it over: move the "saved" baseline to it, so the new order
+     * doesn't count as an unsaved edit. Only the stops part is replaced; a
+     * local rename still counts as unsaved.
+     */
+    private fun rebaseSavedStops(serverStops: List<ItineraryStop>) {
+        val oldStops = savedStopsFingerprint ?: return
+        val newStops = stopsFingerprint(serverStops)
+        savedFingerprint = savedFingerprint?.removeSuffix(oldStops)?.plus(newStops)
+        savedStopsFingerprint = newStops
     }
 
     /** True when the route overview holds edits (or a new route) that haven't been saved. */
@@ -267,32 +312,59 @@ class ItineraryViewModel(
     }
 
     /**
-     * Folds the latest per-stop progress from Firestore into [state].
+     * Folds the latest saved state from Firestore into [state]. The Boolean
+     * is true when the server's stop list was taken over whole.
      *
      * Stop statuses change outside this screen — Arrival marks a stop
-     * completed, Map's "Skip" marks it skipped — while this ViewModel keeps
-     * the copy it loaded earlier. Writing that stale copy back (Save Changes,
-     * Resume Trip) used to silently undo that progress. Local edits (order,
-     * visit lengths, name) are kept; only progress comes from the server.
+     * completed, Map's "Skip" marks it skipped — and Arrival's "Optimize
+     * Route" even re-orders the stops, while this ViewModel keeps the copy
+     * it loaded earlier. Writing that stale copy back (Save Changes, Resume
+     * Trip) used to silently undo that progress and that new order.
+     *
+     * - The visitor hasn't touched the stops here since loading: the saved
+     *   list is the newer one, so it's taken as it is (order included).
+     * - The visitor did edit the stops here: their edits win, and only each
+     *   stop's progress comes from the server.
      */
-    private suspend fun withServerProgress(state: ItineraryUiState): ItineraryUiState {
-        val id = state.editingItineraryId ?: return state
-        val server = itineraryRepository.getItineraryById(id) ?: return state
-        val serverStatus = server.stops.associate { "${it.refType}:${it.refId}" to it.status }
-        return state.copy(
-            generatedStops = state.generatedStops.map { stop ->
-                serverStatus["${stop.refType}:${stop.refId}"]?.let { stop.copy(status = it) } ?: stop
-            },
+    private suspend fun serverProgress(state: ItineraryUiState): Pair<ItineraryUiState, Boolean> {
+        val id = state.editingItineraryId ?: return state to false
+        val server = itineraryRepository.getItineraryById(id) ?: return state to false
+        val withStatus = state.copy(
             itineraryStatus = server.status,
             startedAt = server.startedAt ?: state.startedAt,
             completedAt = server.completedAt,
             deleteAt = server.deleteAt
         )
+
+        // Same clean-up as openSavedItinerary (unique keys for the timeline).
+        val serverStops = server.stops
+            .sortedBy { it.order }
+            .distinctBy { "${it.refType}:${it.refId}" }
+
+        // Checked against the live state, after the read: the visitor may
+        // have switched trips or moved a stop while it was in flight.
+        val live = _uiState.value
+        val stopsUntouched = live.editingItineraryId == id &&
+            savedStopsFingerprint != null &&
+            stopsFingerprint(live.generatedStops) == savedStopsFingerprint
+
+        if (stopsUntouched && serverStops.isNotEmpty()) {
+            rebaseSavedStops(serverStops)
+            return withStatus.copy(generatedStops = serverStops) to true
+        }
+
+        val serverStatus = server.stops.associate { "${it.refType}:${it.refId}" to it.status }
+        return withStatus.copy(
+            generatedStops = state.generatedStops.map { stop ->
+                serverStatus["${stop.refType}:${stop.refId}"]?.let { stop.copy(status = it) } ?: stop
+            }
+        ) to false
     }
 
     /**
      * Called when the Itinerary tab is shown again: brings an open trip's
-     * progress (Done badges, Resume vs Start) up to date with what happened
+     * progress (Done badges, Resume vs Start) — and its stop order, if it
+     * was re-optimized on the Arrival screen — up to date with what happened
      * on the Map/Arrival screens in the meantime.
      */
     fun refreshOpenItineraryProgress() {
@@ -301,10 +373,29 @@ class ItineraryViewModel(
         if (before.editingItineraryId == null || before.isSaving) return
 
         viewModelScope.launch {
-            val merged = withServerProgress(_uiState.value)
+            val (merged, tookServerStops) = serverProgress(_uiState.value)
             val current = _uiState.value
             // Only apply if the visitor hasn't switched itineraries meanwhile.
             if (current.editingItineraryId != merged.editingItineraryId) return@launch
+
+            if (tookServerStops) {
+                val orderChanged = merged.generatedStops.routeKey() != current.generatedStops.routeKey()
+                // A new order makes the old road path wrong; it's fetched again below.
+                val path = if (orderChanged) null else current.routePath
+                _uiState.value = current.copy(
+                    generatedStops = merged.generatedStops,
+                    itineraryStatus = merged.itineraryStatus,
+                    startedAt = merged.startedAt,
+                    completedAt = merged.completedAt,
+                    deleteAt = merged.deleteAt,
+                    routePath = path,
+                    schedule = ItineraryPlanner.buildSchedule(merged.generatedStops, path)
+                )
+                // refreshRoutePath also refreshes "Getting there".
+                if (orderChanged) refreshRoutePath() else refreshApproach()
+                return@launch
+            }
+
             val statusByKey = merged.generatedStops.associate { "${it.refType}:${it.refId}" to it.status }
             val updatedStops = current.generatedStops.map { stop ->
                 statusByKey["${stop.refType}:${stop.refId}"]?.let { stop.copy(status = it) } ?: stop
@@ -317,6 +408,9 @@ class ItineraryViewModel(
                 deleteAt = merged.deleteAt,
                 schedule = ItineraryPlanner.buildSchedule(updatedStops, current.routePath)
             )
+            // "Getting there" is from where the visitor is NOW, and to the
+            // next unfinished stop, both of which may have changed.
+            refreshApproach()
         }
     }
 
@@ -501,6 +595,7 @@ class ItineraryViewModel(
     fun startNewItinerary() {
 
         routePathJob?.cancel()
+        approachJob?.cancel()
 
         _uiState.value = _uiState.value.copy(
             isBuilderActive = true,
@@ -527,10 +622,18 @@ class ItineraryViewModel(
             schedule = emptyList(),
             errorMessage = null,
             infoMessage = null,
-            previewTarget = null
+            previewTarget = null,
+            // Nothing from the previous build carries over.
+            approachLeg = null,
+            isLoadingApproach = false,
+            usedFallbackLocation = false,
+            showAddStopSheet = false,
+            showDiscardEditsDialog = false
         )
 
         savedFingerprint = null
+        savedStopsFingerprint = null
+        generatedStopsSnapshot = null
         preservedSavedTravelMode = null
 
         loadCatalogIfNeeded()
@@ -571,10 +674,18 @@ class ItineraryViewModel(
             schedule = ItineraryPlanner.buildSchedule(stops, null),
             errorMessage = null,
             infoMessage = null,
-            previewTarget = null
+            previewTarget = null,
+            // Nothing from the trip that was open before carries over.
+            approachLeg = null,
+            isLoadingApproach = false,
+            usedFallbackLocation = false,
+            showAddStopSheet = false,
+            showDiscardEditsDialog = false
         )
 
-        savedFingerprint = fingerprint(_uiState.value)
+        markSaved(_uiState.value)
+        // Not a freshly generated route: Back leaves instead of stepping back.
+        generatedStopsSnapshot = null
 
         loadCatalogIfNeeded()
 
@@ -586,7 +697,8 @@ class ItineraryViewModel(
 
     fun closeBuilder() {
         routePathJob?.cancel()
-        _uiState.value = _uiState.value.copy(isBuilderActive = false)
+        approachJob?.cancel()
+        _uiState.value = _uiState.value.copy(isBuilderActive = false, showDiscardEditsDialog = false)
     }
 
     private fun loadCatalogIfNeeded() {
@@ -713,11 +825,12 @@ class ItineraryViewModel(
     }
 
     fun backToSites() {
-        _uiState.value = _uiState.value.copy(builderStep = BuilderStep.SELECT_SITES)
+        // An error from a later step doesn't belong on step 1.
+        _uiState.value = _uiState.value.copy(builderStep = BuilderStep.SELECT_SITES, errorMessage = null)
     }
 
     fun backToInterests() {
-        _uiState.value = _uiState.value.copy(builderStep = BuilderStep.SELECT_INTERESTS)
+        _uiState.value = _uiState.value.copy(builderStep = BuilderStep.SELECT_INTERESTS, errorMessage = null)
     }
 
     /**
@@ -739,18 +852,45 @@ class ItineraryViewModel(
                 // A saved itinerary opens straight at the overview; there
                 // is no wizard behind it to go back to.
                 if (state.editingItineraryId != null) return false
-                routePathJob?.cancel()
-                // Step 3 is only reachable with interests picked; without
-                // any, the visitor came straight from step 2.
-                if (state.selectedInterestCategories.isEmpty()) {
-                    backToInterests()
-                } else {
-                    goToRecommendationsStep()
+                // Going back and forward regenerates the route, so stops the
+                // visitor added, removed or moved here would be lost without
+                // a word. Ask first; nothing changed means step back as usual.
+                val snapshot = generatedStopsSnapshot
+                if (snapshot != null && state.generatedStops.stopKeys() != snapshot) {
+                    _uiState.value = state.copy(showDiscardEditsDialog = true)
+                    return true
                 }
+                stepBackFromNewRoute()
             }
         }
         return true
     }
+
+    /** "Discard" in the discard-edits dialog: drop the edits and step back. */
+    fun confirmDiscardEdits() {
+        _uiState.value = _uiState.value.copy(showDiscardEditsDialog = false)
+        stepBackFromNewRoute()
+    }
+
+    /** "Keep editing" (or dismissing the dialog): stay on the overview. */
+    fun dismissDiscardEdits() {
+        _uiState.value = _uiState.value.copy(showDiscardEditsDialog = false)
+    }
+
+    private fun stepBackFromNewRoute() {
+        routePathJob?.cancel()
+        // Step 3 is only reachable with interests picked; without any, the
+        // visitor came straight from step 2.
+        if (_uiState.value.selectedInterestCategories.isEmpty()) {
+            backToInterests()
+        } else {
+            goToRecommendationsStep()
+        }
+    }
+
+    /** Which stops, in which order — what Add a Stop, remove and drag change. */
+    private fun List<ItineraryStop>.stopKeys(): List<String> =
+        map { "${it.refType}:${it.refId}" }
 
     // ----- Step 4: route generation -----
 
@@ -840,11 +980,21 @@ class ItineraryViewModel(
                 totalWalkingMinutes = optimized.totalWalkingMinutes,
                 totalVisitMinutes = optimized.totalVisitMinutes,
                 usedFallbackLocation = start.isFallback,
+                // The previous build's lines and leg times don't belong to
+                // this route; the new path loads just below.
+                routePath = null,
+                approachLeg = null,
+                isLoadingApproach = false,
                 schedule = ItineraryPlanner.buildSchedule(optimized.orderedStops, null),
                 itineraryName = state.itineraryName.ifBlank {
                     "Intramuros Trip \u2014 ${selectedSites.firstOrNull()?.siteName ?: "My Route"}"
-                }
+                },
+                showDiscardEditsDialog = false
             )
+
+            // What the route looked like as built, so Back can tell whether
+            // the visitor has changed it since.
+            generatedStopsSnapshot = optimized.orderedStops.stopKeys()
 
             refreshRoutePath()
         }
@@ -857,7 +1007,12 @@ class ItineraryViewModel(
     /** Saves first, then starts or resumes at the first incomplete stop. */
     fun beginTrip(onReady: (String) -> Unit) {
         val initialState = _uiState.value
-        if (initialState.generatedStops.isEmpty() || initialState.isSaving) return
+        if (initialState.isSaving) return
+        if (initialState.generatedStops.isEmpty()) {
+            // The button used to do nothing at all once every stop was removed.
+            _uiState.value = initialState.copy(errorMessage = "Add at least one stop before starting.")
+            return
+        }
 
         // Flag the save straight away so a double tap can't start (and
         // write) the trip twice before the coroutine gets going.
@@ -865,8 +1020,9 @@ class ItineraryViewModel(
 
         viewModelScope.launch {
 
-            // Pick up any progress made since this screen loaded the trip.
-            val currentState = withServerProgress(_uiState.value)
+            // Pick up any progress (and re-ordering) made since this screen
+            // loaded the trip.
+            val (currentState, tookServerStops) = serverProgress(_uiState.value)
 
             // Starting an already-finished itinerary means taking it again —
             // every stop goes back to PENDING rather than staying resolved.
@@ -896,6 +1052,17 @@ class ItineraryViewModel(
 
             _uiState.value = state.copy(isSaving = true, errorMessage = null)
 
+            // The saved order changed elsewhere and was taken over: the road
+            // path drawn for the old order no longer fits, so fetch it again
+            // (ready for when the visitor comes back to this screen).
+            if (tookServerStops && state.generatedStops.routeKey() != initialState.generatedStops.routeKey()) {
+                _uiState.value = _uiState.value.copy(
+                    routePath = null,
+                    schedule = ItineraryPlanner.buildSchedule(state.generatedStops, null)
+                )
+                refreshRoutePath()
+            }
+
             val itinerary = itineraryFrom(state)
             val documentId = if (state.editingItineraryId != null) {
                 if (itineraryRepository.updateItinerary(state.editingItineraryId, itinerary)) {
@@ -923,13 +1090,12 @@ class ItineraryViewModel(
                 )
             }
 
-            // Only one itinerary is ever IN_PROGRESS at a time — a trip
-            // already under way gets paused (not lost) rather than left to
-            // silently conflict with this one.
-            val otherActive = itineraryRepository.getActiveItinerary()
-            if (otherActive != null && otherActive.documentId != documentId) {
-                itineraryRepository.pauseItinerary(otherActive.documentId)
-                if (ActiveItineraryTrip.isActiveFor(otherActive.documentId)) {
+            // Only one itinerary is ever IN_PROGRESS at a time — every other
+            // trip already under way gets paused (not lost) rather than left
+            // to silently conflict with this one. All of them, not just the
+            // first match: that match was often this very trip.
+            itineraryRepository.pauseOtherActiveItineraries(documentId).forEach { pausedId ->
+                if (ActiveItineraryTrip.isActiveFor(pausedId)) {
                     ActiveItineraryTrip.clear()
                 }
             }
@@ -940,7 +1106,9 @@ class ItineraryViewModel(
                 itineraryStatus = ItineraryStatus.IN_PROGRESS
             )
 
-            savedFingerprint = fingerprint(_uiState.value)
+            markSaved(_uiState.value)
+            // Saved now: Back from here leaves rather than stepping back.
+            generatedStopsSnapshot = null
 
             val firstStop = ActiveItineraryTrip.start(
                 documentId = documentId,
@@ -1107,12 +1275,17 @@ class ItineraryViewModel(
             // Coming soon: no route is fetched, and none is fetched for a
             // different mode in its place. Times stay as straight-line
             // estimates, marked approximate; the screen explains why.
+            // Totals follow the stops too, so removing or reordering stops
+            // in this mode doesn't leave (and save) the old distance.
+            val estimate = ItineraryPlanner.buildSchedule(stops, null)
             _uiState.value = _uiState.value.copy(
                 routePath = null,
                 isLoadingRoutePath = false,
                 routeIsApproximate = true,
+                totalDistanceMeters = estimate.sumOf { it.travelMetersToHere }.toDouble(),
+                totalWalkingMinutes = estimate.sumOf { it.travelMinutesToHere },
                 totalVisitMinutes = stops.sumOf { it.estimatedVisitMinutes },
-                schedule = ItineraryPlanner.buildSchedule(stops, null)
+                schedule = estimate
             )
             return
         }
@@ -1148,12 +1321,16 @@ class ItineraryViewModel(
 
             val current = _uiState.value
 
-            // The user may have reordered while this was in flight.
-            if (current.generatedStops != stops || current.travelMode != mode) {
+            // The user may have reordered while this was in flight. Only the
+            // stops and their positions matter: a stop's status changing
+            // meanwhile (trip started, progress synced) used to throw away
+            // a perfectly good route.
+            if (current.generatedStops.routeKey() != stops.routeKey() || current.travelMode != mode) {
                 return@launch
             }
 
-            val measured = ItineraryPlanner.withMeasuredTotals(stops, path)
+            val latestStops = current.generatedStops
+            val measured = ItineraryPlanner.withMeasuredTotals(latestStops, path)
 
             _uiState.value = current.copy(
                 isLoadingRoutePath = false,
@@ -1162,7 +1339,7 @@ class ItineraryViewModel(
                 totalDistanceMeters = measured.totalDistanceMeters,
                 totalWalkingMinutes = measured.totalWalkingMinutes,
                 totalVisitMinutes = measured.totalVisitMinutes,
-                schedule = ItineraryPlanner.buildSchedule(stops, path)
+                schedule = ItineraryPlanner.buildSchedule(latestStops, path)
             )
         }
     }
@@ -1178,7 +1355,9 @@ class ItineraryViewModel(
 
         val stops = _uiState.value.generatedStops
         val mode = _uiState.value.travelMode
-        val first = stops.firstOrNull()
+        // The first stop still to visit: a resumed trip whose first stop is
+        // already done continues from the next one.
+        val first = firstOpenStop(stops)
 
         if (first == null || !TravelModes.isAvailable(mode)) {
             _uiState.value = _uiState.value.copy(approachLeg = null, isLoadingApproach = false)
@@ -1223,11 +1402,23 @@ class ItineraryViewModel(
 
             val current = _uiState.value
             // The first stop or the mode may have changed while this ran.
-            if (current.generatedStops.firstOrNull() != first || current.travelMode != mode) return@launch
+            // (Compared by identity, not the whole stop, so a status update
+            // meanwhile doesn't discard the result and leave the spinner on.)
+            val nowFirst = firstOpenStop(current.generatedStops)
+            if (nowFirst?.let { "${it.refType}:${it.refId}" } != "${first.refType}:${first.refId}" ||
+                current.travelMode != mode
+            ) {
+                _uiState.value = current.copy(isLoadingApproach = false)
+                return@launch
+            }
 
             _uiState.value = current.copy(approachLeg = leg, isLoadingApproach = false)
         }
     }
+
+    /** Stop identity and position: what a route depends on (not its status). */
+    private fun List<ItineraryStop>.routeKey(): List<String> =
+        map { "${it.refType}:${it.refId}@${it.latitude},${it.longitude}" }
 
     private data class StartPoint(
         val latitude: Double,
@@ -1463,8 +1654,9 @@ class ItineraryViewModel(
 
         viewModelScope.launch {
 
-            // Don't overwrite progress recorded elsewhere since this loaded.
-            val state = withServerProgress(_uiState.value)
+            // Don't overwrite progress (or a re-ordering) recorded elsewhere
+            // since this loaded.
+            val (state, tookServerStops) = serverProgress(_uiState.value)
 
             val itinerary = itineraryFrom(state)
 
@@ -1509,7 +1701,8 @@ class ItineraryViewModel(
                         state.generatedStops.filter { it.refType == "site" }.map { it.refId }
                     )
                 }
-                savedFingerprint = fingerprint(state)
+                markSaved(state)
+                generatedStopsSnapshot = null
                 // A trip that's under way keeps navigating the saved order.
                 val docId = state.editingItineraryId
                 if (docId != null && ActiveItineraryTrip.isActiveFor(docId)) {
@@ -1529,6 +1722,25 @@ class ItineraryViewModel(
                     isSaving = false,
                     errorMessage = "Couldn't save this itinerary. Please try again."
                 )
+                // The server's stop list was taken over (and the "saved"
+                // baseline moved to it), so show it here too; otherwise the
+                // screen and the baseline would disagree on the order.
+                if (tookServerStops) {
+                    val orderChanged = state.generatedStops.routeKey() != _uiState.value.generatedStops.routeKey()
+                    _uiState.value = _uiState.value.copy(
+                        generatedStops = state.generatedStops,
+                        itineraryStatus = state.itineraryStatus,
+                        startedAt = state.startedAt,
+                        completedAt = state.completedAt,
+                        deleteAt = state.deleteAt,
+                        routePath = if (orderChanged) null else _uiState.value.routePath,
+                        schedule = ItineraryPlanner.buildSchedule(
+                            state.generatedStops,
+                            if (orderChanged) null else _uiState.value.routePath
+                        )
+                    )
+                    if (orderChanged) refreshRoutePath()
+                }
             }
         }
     }
@@ -1544,3 +1756,7 @@ private const val KEY_WIZARD_SITES = "itinerary_wizard_sites"
 private const val KEY_WIZARD_INTERESTS = "itinerary_wizard_interests"
 private const val KEY_WIZARD_RECOMMENDATIONS = "itinerary_wizard_recommendations"
 private const val KEY_WIZARD_NAME = "itinerary_wizard_name"
+
+/** The first stop not yet completed or skipped (the trip resumes there). */
+internal fun firstOpenStop(stops: List<ItineraryStop>): ItineraryStop? =
+    stops.firstOrNull { !StopStatus.isResolved(it.status) }

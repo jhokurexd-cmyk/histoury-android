@@ -21,17 +21,22 @@ object ThemePreference {
 
     private const val PREFS_NAME = "histoury_appearance"
     private const val KEY_THEME_MODE = "theme_mode"
+    private const val KEY_UI_STYLE = "ui_style"
 
     private val _mode = MutableStateFlow(ThemeMode.SYSTEM)
     val mode: StateFlow<ThemeMode> = _mode.asStateFlow()
 
+    // Menu > Theme: Default or Neumorphism. Stored next to the mode for the
+    // same reason: it must be known before the first frame.
+    private val _style = MutableStateFlow(UiStyle.DEFAULT)
+    val style: StateFlow<UiStyle> = _style.asStateFlow()
+
     fun load(context: Context) {
 
-        val stored = context
-            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_THEME_MODE, null)
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-        _mode.value = ThemeMode.fromStoredValue(stored)
+        _mode.value = ThemeMode.fromStoredValue(prefs.getString(KEY_THEME_MODE, null))
+        _style.value = UiStyle.fromStoredValue(prefs.getString(KEY_UI_STYLE, null))
     }
 
     fun set(context: Context, mode: ThemeMode) {
@@ -42,6 +47,17 @@ object ThemePreference {
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_THEME_MODE, mode.name)
+            .apply()
+    }
+
+    fun setStyle(context: Context, style: UiStyle) {
+
+        _style.value = style
+
+        context
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_UI_STYLE, style.name)
             .apply()
     }
 }

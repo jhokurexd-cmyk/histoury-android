@@ -152,6 +152,13 @@ object OfflineContentCache {
         // will later ask for.
         val sites = HistoricalSiteRepository().getHistoricalSites()
 
+        // The repository returns an empty list on errors. Marking that run as
+        // done would skip the warm-up for hours with nothing cached.
+        if (sites.isEmpty()) {
+            _state.value = lastKnownState(context)
+            return
+        }
+
         val places = PlaceRepository().getPlaces()
 
         val contentRepository = SiteContentRepository()

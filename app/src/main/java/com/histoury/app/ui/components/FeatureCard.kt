@@ -1,5 +1,6 @@
 package com.histoury.app.ui.components
 
+import com.histoury.app.theme.softShadow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -52,7 +53,7 @@ fun FeatureCard(
                 width = 108.dp,
                 height = 136.dp
             )
-            .shadow(
+            .softShadow(
                 elevation = 10.dp,
                 shape = RoundedCornerShape(22.dp)
             ),

@@ -1,5 +1,7 @@
 package com.histoury.app.ui.screens.gallery
 
+import com.histoury.app.theme.styledElevation
+import com.histoury.app.theme.softShadow
 import com.histoury.app.ui.tutorial.TutorialStep
 import com.histoury.app.ui.tutorial.TutorialTour
 import com.histoury.app.navigation.navigateSafely
@@ -247,7 +249,7 @@ fun GalleryScreen(
                     Box(
                         modifier = Modifier
                             .size(38.dp)
-                            .shadow(elevation = 2.dp, shape = CircleShape)
+                            .softShadow(elevation = 2.dp, shape = CircleShape)
                             .clip(CircleShape)
                             .background(CardSurface)
                             .clickable(
@@ -529,7 +531,7 @@ private fun GallerySelectionBar(
     Surface(
         shape = RoundedCornerShape(20.dp),
         color = CardSurface,
-        shadowElevation = 8.dp,
+        shadowElevation = styledElevation(8.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
 

@@ -136,6 +136,11 @@ class MapOverviewViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    /** The map has moved to the selected place; don't fly there again on return. */
+    fun onCameraTargetHandled() {
+        _cameraTarget.value = null
+    }
+
     fun onPlaceSelected(place: PlaceResult) {
 
         cameraRequestCounter += 1

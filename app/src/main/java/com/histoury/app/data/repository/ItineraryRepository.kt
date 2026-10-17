@@ -168,35 +168,65 @@ class ItineraryRepository {
     /**
      * The visitor's currently IN_PROGRESS itinerary, if any. There is only
      * ever meant to be one — [com.histoury.app.data.viewmodel.ItineraryViewModel.beginTrip]
-     * pauses any other active trip before starting a new one — but this
-     * takes the first match regardless, since showing a stale second one
-     * would be worse than picking one deterministically.
+     * pauses every other active trip when one starts — but if two ever
+     * exist (e.g. from an older app version), the most recently started one
+     * wins. The query's own order (by document id) is effectively random, so
+     * taking "the first match" could pick an old trip after a restart.
      *
      * This is what lets a killed-and-reopened app (see
      * [com.histoury.app.data.itinerary.ActiveItineraryTrip.rehydrate]) and
      * Home's "Continue Trip" card find the same trip without either one
      * keeping its own copy of "which itinerary is active."
      */
-    suspend fun getActiveItinerary(): Itinerary? {
+    suspend fun getActiveItinerary(): Itinerary? =
+        getActiveItineraries().maxWithOrNull(
+            compareBy<Itinerary>(
+                { timestampMillis(it.startedAt) ?: 0L },
+                { timestampMillis(it.updatedAt) ?: 0L },
+                { it.documentId }
+            )
+        )
 
-        val userId = FirebaseAuth.getInstance().currentUser?.uid ?: return null
+    /**
+     * Every IN_PROGRESS itinerary of the signed-in user (normally zero or
+     * one). Empty when there is no user or the read fails.
+     */
+    suspend fun getActiveItineraries(): List<Itinerary> {
+
+        val userId = FirebaseAuth.getInstance().currentUser?.uid ?: return emptyList()
 
         return try {
 
             db.collection("itineraries")
                 .whereEqualTo("userId", userId)
                 .whereEqualTo("status", ItineraryStatus.IN_PROGRESS)
-                .limit(1)
                 .get()
                 .await()
                 .documents
-                .firstOrNull()
-                ?.let { document -> document.toObject(Itinerary::class.java)?.withLegacyStopStatuses()?.copy(documentId = document.id) }
+                .mapNotNull { document ->
+                    runCatching {
+                        document.toObject(Itinerary::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                            ?.withLegacyStopStatuses()
+                            ?.copy(documentId = document.id)
+                    }.getOrNull()
+                }
 
         } catch (e: Exception) {
-            null
+            emptyList()
         }
     }
+
+    /**
+     * Pauses every IN_PROGRESS itinerary except [keepDocumentId], so only
+     * one trip is ever under way. This used to look at a single match
+     * (limit 1), which was often the trip being started itself — and then
+     * the older trip stayed IN_PROGRESS too. Returns the ids it paused.
+     */
+    suspend fun pauseOtherActiveItineraries(keepDocumentId: String): List<String> =
+        getActiveItineraries()
+            .map { it.documentId }
+            .filter { it.isNotBlank() && it != keepDocumentId }
+            .filter { pauseItinerary(it) }
 
     /**
      * The most recently updated itinerary that's still underway — IN_PROGRESS
@@ -296,6 +326,8 @@ class ItineraryRepository {
             db.collection("itineraries").document(documentId)
                 .update(mapOf("status" to ItineraryStatus.IN_PROGRESS, "updatedAt" to FieldValue.serverTimestamp()))
                 .awaitOrQueued()
+            // Only one trip may be under way at a time.
+            pauseOtherActiveItineraries(documentId)
             true
         } catch (e: Exception) {
             false

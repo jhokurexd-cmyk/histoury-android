@@ -1,5 +1,7 @@
 package com.histoury.app.ui.components
 
+import com.histoury.app.theme.overlayShadow
+import com.histoury.app.theme.softShadow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -73,7 +75,7 @@ fun ExploreGridCard(
             .fillMaxWidth()
             .height(180.dp)
             .pressScale(interactionSource)
-            .shadow(elevation = 5.dp, shape = RoundedCornerShape(20.dp))
+            .softShadow(elevation = 5.dp, shape = RoundedCornerShape(20.dp))
             .clip(RoundedCornerShape(20.dp))
             .background(CardSurface)
             .clickable(
@@ -139,7 +141,7 @@ fun ExploreGridCard(
                     .align(Alignment.TopStart)
                     .padding(OverlayControls.CompactInset)
                     .height(OverlayControls.CompactControlSize)
-                    .shadow(elevation = 3.dp, shape = RoundedCornerShape(50))
+                    .overlayShadow(elevation = 3.dp, shape = RoundedCornerShape(50))
                     .clip(RoundedCornerShape(50))
                     .background(CardSurface.copy(alpha = 0.94f))
                     .padding(horizontal = 10.dp),

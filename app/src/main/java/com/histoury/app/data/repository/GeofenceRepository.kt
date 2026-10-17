@@ -5,9 +5,66 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.histoury.app.data.model.Geofence
 import kotlinx.coroutines.tasks.await
 
+/**
+ * The answer to "does this site have an active geofence?", with a failed
+ * read kept apart from a real "no". The AR gate needs the difference: a
+ * site with no fence is allowed, but a lookup that failed must not be
+ * mistaken for one, or AR would unlock anywhere whenever Firestore hiccups.
+ */
+sealed interface GeofenceLookup {
+    data class Found(val geofence: Geofence) : GeofenceLookup
+
+    /** The server confirmed there is no active fence for this id. */
+    object NotFound : GeofenceLookup
+
+    /** Couldn't tell: the read failed, or only an empty offline cache answered. */
+    object Failed : GeofenceLookup
+}
+
 class GeofenceRepository {
 
     private val db = FirebaseFirestore.getInstance()
+
+    /**
+     * Like [getGeofenceForSite], but says when the lookup failed instead of
+     * returning null for it. An empty answer from the offline cache counts
+     * as Failed, not NotFound: it means "nothing cached", not "no fence".
+     */
+    suspend fun lookupGeofenceForSite(siteId: String): GeofenceLookup {
+
+        if (siteId.isBlank()) {
+            return GeofenceLookup.NotFound
+        }
+
+        return try {
+
+            val snapshot = db
+                .collection("geofences")
+                .whereEqualTo("siteId", siteId)
+                .whereEqualTo("status", "active")
+                .get()
+                .await()
+
+            val document = snapshot.documents.maxByOrNull { doc ->
+                (doc.get("updatedAt") as? Timestamp)?.seconds
+                    ?: (doc.get("createdAt") as? Timestamp)?.seconds
+                    ?: Long.MIN_VALUE
+            }
+
+            val geofence = document?.toObject(Geofence::class.java)
+
+            when {
+                document != null && geofence != null -> GeofenceLookup.Found(
+                    geofence.copy(id = if (geofence.id.isBlank()) document.id else geofence.id)
+                )
+                snapshot.metadata.isFromCache -> GeofenceLookup.Failed
+                else -> GeofenceLookup.NotFound
+            }
+
+        } catch (e: Exception) {
+            GeofenceLookup.Failed
+        }
+    }
 
     suspend fun getGeofenceForSite(siteId: String): Geofence? {
 

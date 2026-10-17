@@ -1,5 +1,6 @@
 package com.histoury.app.ui.screens.support
 
+import com.histoury.app.theme.softShadow
 import com.histoury.app.navigation.safePopBackStack
 import android.content.Intent
 import android.net.Uri
@@ -261,7 +262,8 @@ private val quickHelpGroups = listOf(
                 title = "Can I use dark mode?",
                 subtitle = "Change how Histoury looks",
                 answer = "Yes. Go to Menu > Appearance and choose Light, Dark or your " +
-                    "phone's setting."
+                    "phone's setting. Menu > Theme changes the style of cards and " +
+                    "buttons: Default, Neumorphism or Glassmorphism. Each works in light and dark."
             )
         )
     )
@@ -312,7 +314,7 @@ fun SupportScreen(
                 Box(
                     modifier = Modifier
                         .size(38.dp)
-                        .shadow(elevation = 2.dp, shape = CircleShape)
+                        .softShadow(elevation = 2.dp, shape = CircleShape)
                         .clip(CircleShape)
                         .background(CardSurface)
                         .clickable(
@@ -362,7 +364,7 @@ fun SupportScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .shadow(elevation = 3.dp, shape = RoundedCornerShape(22.dp))
+                    .softShadow(elevation = 3.dp, shape = RoundedCornerShape(22.dp))
                     .clip(RoundedCornerShape(22.dp))
                     .background(CardSurface)
                     .padding(16.dp)
@@ -461,7 +463,7 @@ fun SupportScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .shadow(elevation = 3.dp, shape = RoundedCornerShape(22.dp))
+                    .softShadow(elevation = 3.dp, shape = RoundedCornerShape(22.dp))
                     .clip(RoundedCornerShape(22.dp))
                     .background(CardSurface)
                     .padding(16.dp)
@@ -623,7 +625,7 @@ fun SupportScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .shadow(elevation = 3.dp, shape = RoundedCornerShape(22.dp))
+                    .softShadow(elevation = 3.dp, shape = RoundedCornerShape(22.dp))
                     .clip(RoundedCornerShape(22.dp))
                     .background(CardSurface)
                     .padding(16.dp)
@@ -683,7 +685,7 @@ fun SupportScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .shadow(elevation = 3.dp, shape = RoundedCornerShape(22.dp))
+                    .softShadow(elevation = 3.dp, shape = RoundedCornerShape(22.dp))
                     .clip(RoundedCornerShape(22.dp))
                     .background(CardSurface)
                     .padding(16.dp)

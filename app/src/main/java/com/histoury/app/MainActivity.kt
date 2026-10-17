@@ -1,5 +1,6 @@
 package com.histoury.app
 
+import com.histoury.app.theme.styleBackdrop
 import android.app.PictureInPictureParams
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -42,6 +43,7 @@ import com.histoury.app.theme.isDarkTheme
 import com.histoury.app.util.NavigationPipState
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -60,6 +62,24 @@ private val ARRIVAL_INTERRUPTIBLE_ROUTES = setOf(
     Routes.History.route,
     Routes.Gallery.route,
     Routes.SiteLibrary.route
+)
+
+/** Screens where a tapped arrival notification must not open Arrival (no one signed in). */
+private val NO_ARRIVAL_ROUTES = setOf(
+    Routes.Login.route,
+    Routes.Register.route,
+    Routes.Suspended.route,
+    Routes.Onboarding.route
+)
+
+/** The bottom-bar tabs, whose screens are saved when switching tabs. */
+private val TAB_ROUTES = listOf(
+    Routes.Home.route,
+    Routes.MapOverview.route,
+    Routes.Itinerary.route,
+    Routes.History.route,
+    Routes.Gallery.route,
+    Routes.Menu.route
 )
 
 class MainActivity : ComponentActivity() {
@@ -138,8 +158,9 @@ class MainActivity : ComponentActivity() {
         setContent {
 
             val themeMode by ThemePreference.mode.collectAsState()
+            val uiStyle by ThemePreference.style.collectAsState()
 
-            HistouryTheme(themeMode = themeMode) {
+            HistouryTheme(themeMode = themeMode, uiStyle = uiStyle) {
 
                 // enableEdgeToEdge() draws behind the status bar, so the
                 // system's own icons sit on the app's background and have
@@ -157,7 +178,9 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Surface(
-                    modifier = Modifier.fillMaxSize(),
+                    // Glassmorphism's colour wash, behind every screen (no-op
+                    // in the other styles, where Background is solid).
+                    modifier = Modifier.fillMaxSize().styleBackdrop(),
                     color = Background
                 ) {
 
@@ -179,21 +202,28 @@ class MainActivity : ComponentActivity() {
 
                     LaunchedEffect(pendingArrivalSiteId) {
 
-                        val siteId = pendingArrivalSiteId
+                        val siteId = pendingArrivalSiteId ?: return@LaunchedEffect
 
-                        if (siteId != null) {
+                        // On a cold start the app is still on the AuthGate
+                        // (checking the account). AuthGate then goes to Home
+                        // and clears everything above it, which used to throw
+                        // away an Arrival screen opened too early. So wait
+                        // until the app has left AuthGate, then open it.
+                        val landedOn = navController.currentBackStackEntryFlow
+                            .first { it.destination.route != Routes.AuthGate.route }
+                            .destination.route
 
-                            pendingArrivalSiteId = null
+                        pendingArrivalSiteId = null
 
-                            // A notification from a session that has since
-                            // ended (logout/suspension) opens the app
-                            // normally instead of an Arrival screen with no
-                            // one signed in.
-                            if (FirebaseAuth.getInstance().currentUser != null) {
-                                navController.navigate(
-                                    Routes.Arrival.createRoute(siteId)
-                                )
-                            }
+                        // A notification from a session that has since
+                        // ended (logout/suspension) opens the app
+                        // normally instead of an Arrival screen with no
+                        // one signed in.
+                        val signedIn = FirebaseAuth.getInstance().currentUser != null
+                        if (signedIn && landedOn !in NO_ARRIVAL_ROUTES) {
+                            navController.navigate(
+                                Routes.Arrival.createRoute(siteId)
+                            )
                         }
                     }
 
@@ -255,6 +285,14 @@ class MainActivity : ComponentActivity() {
                         AuthRepository().authStateUidFlow().collect { uid ->
                             if (uid == null && hadUser) {
                                 SessionCleanup.onSignedOut(applicationContext)
+                                // Tab screens are kept (with their data) when
+                                // switching tabs. They belong to the account
+                                // that just signed out: drop them, so the next
+                                // account can't see its gallery, itinerary
+                                // draft or visited sites.
+                                TAB_ROUTES.forEach { route ->
+                                    runCatching { navController.clearBackStack(route) }
+                                }
                             }
                             // Signed in (again): saved downloads stay on the
                             // phone across accounts; check them against the

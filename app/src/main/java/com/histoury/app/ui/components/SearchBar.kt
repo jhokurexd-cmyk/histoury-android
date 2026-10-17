@@ -1,5 +1,6 @@
 package com.histoury.app.ui.components
 
+import com.histoury.app.theme.softShadow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -40,6 +41,8 @@ import com.histoury.app.theme.Primary
 import com.histoury.app.theme.PrimarySoft
 import com.histoury.app.theme.TextPrimary
 import com.histoury.app.theme.TextTertiary
+import com.histoury.app.theme.isNeumorphic
+import com.histoury.app.theme.softInset
 
 @Composable
 fun SearchBar(
@@ -59,14 +62,21 @@ fun SearchBar(
         modifier = modifier
             .fillMaxWidth()
             .height(height)
-            .shadow(
-                elevation = 6.dp,
-                shape = RoundedCornerShape(height / 2),
-                ambientColor = Primary.copy(alpha = 0.15f),
-                spotColor = Primary.copy(alpha = 0.15f)
+            // Default: a raised pill with a soft coral shadow (a glass pill
+            // in Glassmorphism, via softShadow).
+            // Neumorphism: pressed into the page instead (softInset below),
+            // the usual soft-UI look for a text field.
+            .then(
+                if (isNeumorphic) Modifier else Modifier.softShadow(
+                    elevation = 6.dp,
+                    shape = RoundedCornerShape(height / 2),
+                    ambientColor = Primary.copy(alpha = 0.15f),
+                    spotColor = Primary.copy(alpha = 0.15f)
+                )
             )
             .clip(RoundedCornerShape(height / 2))
             .background(CardSurface)
+            .softInset(RoundedCornerShape(height / 2))
             // Less on the right: the trailing buttons carry their own 44dp
             // touch area, which supplies that side's breathing room.
             .padding(start = 16.dp, end = if (showFilterButton || value.isNotEmpty()) 4.dp else 16.dp),

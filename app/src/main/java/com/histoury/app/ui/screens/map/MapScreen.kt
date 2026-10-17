@@ -175,9 +175,13 @@ fun MapScreen(
     // ending navigation doesn't immediately restart it.
     var autoStartHandled by rememberSaveable { mutableStateOf(false) }
 
+    // Precise and approximate are asked for together (Android 12+ ignores a
+    // request for precise alone), and either one counts: a visitor who
+    // chose "Approximate" used to get no route, distance or ETA at all.
     val locationPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val isGranted = grants.values.any { it } || hasAnyLocationPermission(context)
         mapViewModel.onLocationPermissionResult(isGranted)
         if (startNavigationWhenPermitted) {
             startNavigationWhenPermitted = false
@@ -201,15 +205,12 @@ fun MapScreen(
 
         mapViewModel.loadSiteData(siteId)
 
-        val alreadyGranted = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
+        val alreadyGranted = hasAnyLocationPermission(context)
 
         if (alreadyGranted) {
             mapViewModel.onLocationPermissionResult(true)
         } else {
-            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+            locationPermissionLauncher.launch(LOCATION_PERMISSIONS)
         }
     }
 
@@ -382,13 +383,8 @@ fun MapScreen(
         onDispose { view.keepScreenOn = false }
     }
 
-    // Closing the floating window ends navigation (see NavigationPipState).
-    LaunchedEffect(Unit) {
-        // The End button on the ongoing navigation notification. Closing the
-        // floating mini map no longer ends navigation — the foreground
-        // service keeps it running, like Google Maps.
-        NavigationPipState.endNavigationRequests.collect { mapViewModel.stopNavigation() }
-    }
+    // The End button on the ongoing navigation notification is handled in
+    // MapViewModel, so it works even when this screen isn't showing.
 
     // Only a pan/zoom by the visitor's own finger stops follow mode. Read
     // through snapshotFlow rather than as a LaunchedEffect key: the follow
@@ -691,7 +687,7 @@ fun MapScreen(
                         mapViewModel.startNavigation()
                     } else {
                         startNavigationWhenPermitted = true
-                        locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                        locationPermissionLauncher.launch(LOCATION_PERMISSIONS)
                     }
                 },
                 onTravelModeChange = { mode ->
@@ -775,6 +771,16 @@ fun MapScreen(
                         color = Primary,
                         width = 10f
                     )
+                    // Car / motorcycle: the walk from the drop-off to the
+                    // entrance, dotted like the commute walks.
+                    if (uiState.finalWalkPoints.size >= 2) {
+                        Polyline(
+                            points = uiState.finalWalkPoints,
+                            color = Primary,
+                            width = 9f,
+                            pattern = listOf(Dot(), Gap(14f))
+                        )
+                    }
                 }
 
                 if (siteLatLng != null) {
@@ -1584,6 +1590,18 @@ internal fun openInGoogleMaps(context: Context, uiState: MapUiState) {
         }
     }
 }
+
+/** Asked for together: precise alone is ignored on Android 12+. */
+private val LOCATION_PERMISSIONS = arrayOf(
+    Manifest.permission.ACCESS_FINE_LOCATION,
+    Manifest.permission.ACCESS_COARSE_LOCATION
+)
+
+/** Precise or approximate: either is enough for directions and navigation. */
+private fun hasAnyLocationPermission(context: Context): Boolean =
+    LOCATION_PERMISSIONS.any {
+        ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+    }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this

@@ -518,15 +518,21 @@ object OfflineSiteManager {
         _tasks.update { it - siteId }
         val request = requests.remove(siteId)
         persist(appContext)
-        if (request != null) {
-            // Only once the download has actually stopped, so it can't
-            // recreate a .part file after it was deleted.
-            downloadScope.launch {
-                active?.join()
-                assetsFor(request.site, request.content).forEach { asset ->
-                    val destination = destinationFor(appContext, asset)
-                    File(destination.parentFile, "${destination.name}.part").delete()
-                }
+        // Only once the download has actually stopped, so it can't
+        // recreate a .part file after it was deleted.
+        downloadScope.launch {
+            active?.join()
+            // A task brought back by restore() after a restart has no
+            // request in memory yet; without loading it, its partial files
+            // (possibly hundreds of MB) were never deleted.
+            val known = request ?: runCatching { loadRequest(siteId) }.getOrNull()
+                ?.also { requests.remove(siteId) }
+                ?: return@launch
+            // Queued again in the meantime: those partials are in use.
+            if (siteId in _tasks.value) return@launch
+            assetsFor(known.site, known.content).forEach { asset ->
+                val destination = destinationFor(appContext, asset)
+                File(destination.parentFile, "${destination.name}.part").delete()
             }
         }
         wake.update { it + 1 }
@@ -1332,6 +1338,123 @@ object OfflineSiteManager {
 
             manifest.delete().also { _changed.update { it + 1 } }
         }
+
+    // ---------------------------------------------------------------------
+    // Storage sweep
+    // ---------------------------------------------------------------------
+
+    /** Browse-time cache (models/narration not in any download) is kept under this. */
+    private const val UNREFERENCED_CACHE_CAP_BYTES = 500L * 1024L * 1024L
+
+    /** An unreferenced file not used for this long is stale (e.g. a replaced model). */
+    private const val UNREFERENCED_MAX_AGE_MS = 30L * 24L * 60L * 60L * 1000L
+
+    /**
+     * Never touch anything written or used this recently: it may belong to a
+     * download that is running right now and hasn't written its manifest yet.
+     */
+    private const val SWEEP_GRACE_MS = 60L * 60L * 1000L
+
+    @Volatile
+    private var sweepStarted = false
+
+    /**
+     * Once per app start, in the background: removes files nothing refers to.
+     *
+     * Models prefetched while browsing (ArModelCache) and narration cached by
+     * the player are keyed by URL and were never deleted, so every replaced
+     * model and every site merely looked at stayed in filesDir for good —
+     * which Android never reclaims, and Offline Downloads can't show. Same
+     * for partial files left by crashed or cancelled downloads.
+     *
+     * Conservative on purpose:
+     *  - anything any download manifest refers to is always kept (matched by
+     *    file name, so a different spelling of the same path can't matter);
+     *  - if any manifest can't be read, nothing is deleted at all;
+     *  - nothing touched within the last hour is deleted;
+     *  - partial files of the download queue are kept while it has entries,
+     *    so paused downloads can still resume.
+     */
+    fun sweepStorageOnce(context: Context) {
+        if (sweepStarted) return
+        sweepStarted = true
+        val appContext = context.applicationContext
+        downloadScope.launch {
+            runCatching { sweepStorage(appContext) }
+                .onFailure { Log.w(TAG, "Storage sweep failed", it) }
+        }
+    }
+
+    private fun sweepStorage(context: Context) {
+
+        val keepNames = referencedFileNames(context) ?: return
+
+        val queueHasEntries = _tasks.value.isNotEmpty() || runCatching {
+            JSONArray(
+                context.getSharedPreferences(QUEUE_PREFS, Context.MODE_PRIVATE)
+                    .getString(KEY_TASKS, "[]")
+            ).length() > 0
+        }.getOrDefault(true)
+
+        val now = System.currentTimeMillis()
+        val dirs = listOf(OfflineStore.modelsDir(context), OfflineStore.audioDir(context))
+        val unreferenced = mutableListOf<File>()
+
+        dirs.forEach { dir ->
+            dir.listFiles()?.forEach { file ->
+                if (!file.isFile || file.name in keepNames) return@forEach
+                if (now - file.lastModified() < SWEEP_GRACE_MS) return@forEach
+
+                val name = file.name
+                if (name.endsWith(".glb.part") || name.endsWith(".mp3.part")) {
+                    // The download queue's own partials: resumable, so only
+                    // removed once the queue is empty and nothing can resume them.
+                    if (!queueHasEntries) file.delete()
+                } else if (name.endsWith(".part") || name.endsWith(".download")) {
+                    // ArModelCache's and the narration player's temporary
+                    // files: never resumed, each attempt starts over.
+                    file.delete()
+                } else if (name.endsWith(".glb") || name.endsWith(".mp3")) {
+                    unreferenced.add(file)
+                }
+            }
+        }
+
+        // Stale first, then least recently used until under the cap.
+        // (ArModelCache and the narration player refresh lastModified on use.)
+        val survivors = unreferenced
+            .filterNot { now - it.lastModified() > UNREFERENCED_MAX_AGE_MS && it.delete() }
+            .sortedBy { it.lastModified() }
+        var total = survivors.sumOf { it.length() }
+        for (file in survivors) {
+            if (total <= UNREFERENCED_CACHE_CAP_BYTES) break
+            val size = file.length()
+            if (file.delete()) total -= size
+        }
+    }
+
+    /**
+     * Every file name any download manifest refers to, or null if any
+     * manifest couldn't be read (then the sweep keeps everything).
+     */
+    private fun referencedFileNames(context: Context): Set<String>? {
+        val names = mutableSetOf<String>()
+        val manifests = manifestsDir(context).listFiles() ?: return null
+        for (manifest in manifests) {
+            if (manifest.extension != "json") continue
+            val json = runCatching { JSONObject(manifest.readText()) }.getOrNull() ?: return null
+            json.optJSONArray("files")?.let { paths ->
+                for (i in 0 until paths.length()) names += File(paths.getString(i)).name
+            }
+            json.optString("modelPath").takeIf { it.isNotBlank() }?.let { names += File(it).name }
+            json.optJSONObject("audio")?.let { audio ->
+                audio.keys().forEach { key ->
+                    audio.optString(key).takeIf { it.isNotBlank() }?.let { names += File(it).name }
+                }
+            }
+        }
+        return names
+    }
 
     /** Human-readable size, for a button or a list row. */
     fun formatBytes(bytes: Long): String = when {

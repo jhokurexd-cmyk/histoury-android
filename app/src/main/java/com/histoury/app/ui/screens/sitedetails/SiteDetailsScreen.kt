@@ -130,7 +130,9 @@ fun SiteDetailsScreen(
 
         when {
 
-            uiState.isLoading -> {
+            // Only before the first load: a reload on return (e.g. Back from
+            // AR) keeps the page and its scroll position on screen.
+            uiState.isLoading && uiState.site == null -> {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center

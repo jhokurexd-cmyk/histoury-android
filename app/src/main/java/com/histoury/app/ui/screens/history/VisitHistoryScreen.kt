@@ -1,5 +1,7 @@
 package com.histoury.app.ui.screens.history
 
+import com.histoury.app.theme.styledElevation
+import com.histoury.app.theme.softShadow
 import com.histoury.app.ui.tutorial.TutorialStep
 import com.histoury.app.ui.tutorial.TutorialTour
 import com.histoury.app.navigation.navigateSafely
@@ -138,7 +140,7 @@ fun VisitHistoryScreen(
                     Box(
                         modifier = Modifier
                             .size(38.dp)
-                            .shadow(elevation = 2.dp, shape = CircleShape)
+                            .softShadow(elevation = 2.dp, shape = CircleShape)
                             .clip(CircleShape)
                             .background(CardSurface)
                             .clickable(
@@ -336,7 +338,7 @@ private fun VisitedSiteRow(
         onClick = onOpenClick,
         shape = RoundedCornerShape(20.dp),
         color = CardSurface,
-        shadowElevation = 3.dp,
+        shadowElevation = styledElevation(3.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
 

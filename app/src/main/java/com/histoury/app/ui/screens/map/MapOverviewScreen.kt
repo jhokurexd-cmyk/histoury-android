@@ -1,5 +1,6 @@
 package com.histoury.app.ui.screens.map
 
+import com.histoury.app.theme.styledElevation
 import com.histoury.app.ui.tutorial.TutorialStep
 import com.histoury.app.ui.tutorial.TutorialTour
 import com.histoury.app.ui.tutorial.tutorialTarget
@@ -175,6 +176,7 @@ fun MapOverviewScreen(
             cameraPositionState.animate(
                 CameraUpdateFactory.newLatLngZoom(target.latLng, 15f)
             )
+            mapOverviewViewModel.onCameraTargetHandled()
         } catch (e: Exception) {
             // Map not laid out yet.
         }
@@ -223,6 +225,7 @@ fun MapOverviewScreen(
                 OverviewMapLibre(
                     sites = sites,
                     cameraTarget = cameraTarget,
+                    onCameraTargetHandled = { mapOverviewViewModel.onCameraTargetHandled() },
                     showUserLocation = hasLocationPermission,
                     topInsetDp = 74f,
                     bottomInsetDp = BottomNavBarInset.value,
@@ -325,7 +328,7 @@ fun MapOverviewScreen(
                 Surface(
                     shape = RoundedCornerShape(26.dp),
                     color = CardSurface,
-                    shadowElevation = 6.dp,
+                    shadowElevation = styledElevation(6.dp),
                     modifier = Modifier.tutorialTarget("map_search").fillMaxWidth()
                 ) {
 
@@ -398,7 +401,7 @@ fun MapOverviewScreen(
                     Surface(
                         shape = RoundedCornerShape(18.dp),
                         color = CardSurface,
-                        shadowElevation = 6.dp,
+                        shadowElevation = styledElevation(6.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
 
@@ -554,7 +557,7 @@ private fun MapSiteCard(
     Surface(
         shape = RoundedCornerShape(22.dp),
         color = CardSurface,
-        shadowElevation = 8.dp,
+        shadowElevation = styledElevation(8.dp),
         modifier = modifier.fillMaxWidth()
     ) {
 

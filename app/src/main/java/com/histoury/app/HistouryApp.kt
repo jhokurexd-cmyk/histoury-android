@@ -39,6 +39,10 @@ class HistouryApp : Application(), ImageLoaderFactory {
         com.histoury.app.data.repository.FavoritesRepository.init(this)
         // "Avoid expressways and tolls" for car routes, remembered per phone.
         com.histoury.app.data.repository.DriveOptions.load(this)
+        // Background, once per start: removes downloaded models/narration
+        // and partial files that no saved download refers to, and keeps the
+        // browse-time model cache under its size cap.
+        com.histoury.app.data.offline.OfflineSiteManager.sweepStorageOnce(this)
     }
 
     /**

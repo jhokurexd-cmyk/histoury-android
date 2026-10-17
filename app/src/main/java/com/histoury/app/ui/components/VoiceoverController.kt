@@ -130,7 +130,12 @@ class VoiceoverController {
         if (loadingSection == section) return
 
         // A different section: the previous one is discarded, including one
-        // still loading.
+        // still loading. Its button stops showing "playing" straight away,
+        // so a tap on it while the new one loads can't drive the new player.
+        activeSection = null
+        isPlaying = false
+        positionMs = 0
+        durationMs = 0
         release()
 
         error = null
@@ -184,7 +189,11 @@ class VoiceoverController {
         val key = url.hashCode().toUInt().toString(16)
         val target = File(directory, "$key.mp3")
 
-        if (target.isFile && target.length() > 0L) return@withContext target
+        if (target.isFile && target.length() > 0L) {
+            // Marks it recently used for the storage sweep's size cap.
+            runCatching { target.setLastModified(System.currentTimeMillis()) }
+            return@withContext target
+        }
 
         val partial = File(directory, "$key.part")
         partial.delete()

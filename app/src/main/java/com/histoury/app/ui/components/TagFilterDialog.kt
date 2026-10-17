@@ -1,5 +1,6 @@
 package com.histoury.app.ui.components
 
+import com.histoury.app.theme.SheetSurface
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -45,7 +46,7 @@ fun TagFilterDialog(
 
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = CardSurface
+            color = SheetSurface
         ) {
 
             Column(

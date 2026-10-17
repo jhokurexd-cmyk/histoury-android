@@ -45,13 +45,13 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             )
 
             // Play Services drops every fence when location is switched off.
-            // Try to put them back now; if location is still off this fails
-            // and Home re-registers them the next time it's opened.
+            // Put them back now if location is on; otherwise wait (without
+            // giving up) for it to come back on — see GeofenceSync.
             if (geofencingEvent.errorCode == GeofenceStatusCodes.GEOFENCE_NOT_AVAILABLE) {
                 val resync = goAsync()
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
-                        GeofenceSync.resyncOrScheduleRetry(context)
+                        GeofenceSync.resyncWhenLocationAvailable(context)
                     } catch (e: Exception) {
                         Log.w("GeofenceReceiver", "Couldn't re-register geofences", e)
                     } finally {

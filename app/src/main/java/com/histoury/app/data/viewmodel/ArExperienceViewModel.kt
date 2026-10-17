@@ -11,6 +11,7 @@ import com.histoury.app.data.model.Geofence
 import com.histoury.app.data.model.SiteContent
 import com.histoury.app.data.model.HistoricalSite
 import com.histoury.app.data.repository.ArCaptureRepository
+import com.histoury.app.data.repository.GeofenceLookup
 import com.histoury.app.data.repository.GeofenceRepository
 import com.histoury.app.data.repository.HistoricalSiteRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,6 +60,12 @@ enum class ArStage {
     /** "Lock in Place" was pressed; position, rotation and scale are frozen. */
     PLACED
 }
+
+/**
+ * What the AR gate knows about this site's geofence. UNKNOWN (the lookup
+ * failed) is kept apart from UNFENCED so a failed read never unlocks AR.
+ */
+enum class FenceStatus { FENCED, UNFENCED, UNKNOWN }
 
 data class ArUiState(
 
@@ -232,9 +239,19 @@ class ArExperienceViewModel(application: Application) : AndroidViewModel(applica
      */
     suspend fun verifyGeofence(location: Location?): Boolean {
 
-        val site = _uiState.value.site ?: return true
+        // No site loaded yet means nothing to unlock; never pass here.
+        val site = _uiState.value.site ?: return false
 
-        if (!ensureGeofenceResolved()) return true
+        when (ensureGeofenceResolved()) {
+            // Confirmed by the server: this site has no fence. Allowed, as before.
+            FenceStatus.UNFENCED -> return true
+            // Couldn't find out. Fail closed, with Try again on screen.
+            FenceStatus.UNKNOWN -> {
+                onGeofenceLookupFailed()
+                return false
+            }
+            FenceStatus.FENCED -> Unit
+        }
 
         if (location == null) {
             _uiState.value = _uiState.value.copy(
@@ -253,7 +270,8 @@ class ArExperienceViewModel(application: Application) : AndroidViewModel(applica
     }
 
     /**
-     * Resolves and caches this site's fence, returning whether it has one.
+     * Resolves and caches this site's fence: FENCED, UNFENCED (server
+     * confirmed none), or UNKNOWN (lookup failed; not cached, so retried).
      *
      * Split out of [verifyGeofence] so the screen's gate can settle the
      * fence first and only then start spending fixes on it — there is no
@@ -265,17 +283,32 @@ class ArExperienceViewModel(application: Application) : AndroidViewModel(applica
      * answer came back, so a transient Firestore error is retried rather
      * than silently disabling the gate for the rest of the session.
      */
-    suspend fun ensureGeofenceResolved(): Boolean {
+    suspend fun ensureGeofenceResolved(): FenceStatus {
 
-        if (geofenceResolved) return siteGeofence != null
-
-        val site = _uiState.value.site ?: return false
-
-        val geofence = try {
-            geofenceRepository.getGeofenceForSite(site.siteId)
-        } catch (e: Exception) {
-            return false
+        if (geofenceResolved) {
+            return if (siteGeofence != null) FenceStatus.FENCED else FenceStatus.UNFENCED
         }
+
+        val site = _uiState.value.site ?: return FenceStatus.UNKNOWN
+
+        // A fence's siteId may be the site's short id or its document id
+        // (the Site Details AR check already tries both), so look under
+        // both before concluding there is none. Only a confirmed "none"
+        // under every id counts as unfenced; any failed read is UNKNOWN.
+        val ids = listOf(site.siteId, site.documentId).filter { it.isNotBlank() }.distinct()
+        var geofence: Geofence? = null
+        var anyFailed = ids.isEmpty()
+        for (id in ids) {
+            when (val result = geofenceRepository.lookupGeofenceForSite(id)) {
+                is GeofenceLookup.Found -> geofence = result.geofence
+                GeofenceLookup.NotFound -> Unit
+                GeofenceLookup.Failed -> anyFailed = true
+            }
+            if (geofence != null) break
+        }
+
+        // Not cached: the next check (Try again) asks the server again.
+        if (geofence == null && anyFailed) return FenceStatus.UNKNOWN
 
         // Checked against the site's own coordinates when it has them —
         // the same point arrival detection and the Map route use — so AR
@@ -289,7 +322,21 @@ class ArExperienceViewModel(application: Application) : AndroidViewModel(applica
         }
         geofenceResolved = true
 
-        return geofence != null
+        return if (geofence != null) FenceStatus.FENCED else FenceStatus.UNFENCED
+    }
+
+    /**
+     * The fence lookup failed (offline with nothing cached, or a Firestore
+     * error). AR stays locked rather than opening anywhere; the outside-site
+     * screen's Try again runs the check again.
+     */
+    fun onGeofenceLookupFailed() {
+        val siteName = _uiState.value.site?.siteName.orEmpty()
+        _uiState.value = _uiState.value.copy(
+            stage = ArStage.OUTSIDE_GEOFENCE,
+            outsideGeofenceReason = "Histoury couldn't check that you're at $siteName. " +
+                "Check your connection, then try again."
+        )
     }
 
     /**

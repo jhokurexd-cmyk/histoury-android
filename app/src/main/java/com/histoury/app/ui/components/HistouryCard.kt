@@ -1,5 +1,6 @@
 package com.histoury.app.ui.components
 
+import com.histoury.app.theme.softShadow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -22,7 +23,7 @@ fun HistouryCard(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .shadow(
+            .softShadow(
                 elevation = 12.dp,
                 shape = RoundedCornerShape(28.dp),
                 clip = false

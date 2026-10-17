@@ -112,7 +112,14 @@ data class MapUiState(
      * the step list and for drawing walking and riding parts differently.
      * Empty in every other mode.
      */
-    val commuteSteps: List<RouteStep> = emptyList()
+    val commuteSteps: List<RouteStep> = emptyList(),
+
+    /**
+     * Car / motorcycle only: the walk from the drop-off point (where
+     * [routePoints] ends) to the visitor entrance. Drawn as a separate
+     * dotted line; empty when there is no such walk.
+     */
+    val finalWalkPoints: List<LatLng> = emptyList()
 )
 
 /**
@@ -206,6 +213,15 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     private val directionsRepository = DirectionsRepository()
 
     init {
+        // The End button on the ongoing navigation notification. Collected
+        // here rather than in MapScreen, so it still works when another
+        // screen (an arrival, a site page) is open on top of the map.
+        viewModelScope.launch {
+            NavigationPipState.endNavigationRequests.collect {
+                if (_uiState.value.isNavigating) stopNavigation()
+            }
+        }
+
         // Flipping "Avoid expressways and tolls" re-plans a car or
         // motorcycle route straight away (drop(1): not the initial value).
         viewModelScope.launch {
@@ -265,6 +281,9 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
     private var lastRouteRefreshAtMs = 0L
 
+    /** The destination [loadSiteData] last loaded successfully. */
+    private var loadedSiteId: String? = null
+
     private var routeRequestJob: Job? = null
 
     // Seconds per metre on the current route, from the last Routes API
@@ -276,6 +295,19 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
     // Off-route fixes in a row (see OFF_ROUTE_CONFIRMATIONS).
     private var offRouteStreak = 0
+
+    // True once the visitor has been within the off-route limit of the
+    // current route. Until then they can't have "left" it: a route often
+    // starts at the nearest road, further away than the limit (a big plaza,
+    // a car park), and every new route would start there again — an
+    // endless "Rerouting." loop. Cleared whenever a new route arrives.
+    private var hasBeenOnRoute = false
+
+    // The drop-off walk of the current car / motorcycle route (see
+    // MapUiState.finalWalkPoints): its length and how long it takes, so
+    // the live ETA counts the last stretch at walking pace. 0 when none.
+    private var finalWalkMeters = 0f
+    private var finalWalkSeconds = 0.0
 
     // Travel mode of the route currently on screen, so a failed refresh can
     // keep showing it — but never a route for a different mode.
@@ -296,6 +328,11 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadSiteData(siteDocumentId: String) {
+
+        // Already showing this destination (the screen came back, or the
+        // activity was recreated by a dark-mode switch mid-navigation):
+        // reloading would wipe the live route and re-request it twice.
+        if (siteDocumentId == loadedSiteId && _uiState.value.site != null) return
 
         // A different destination: nothing on screen belongs to it yet.
         lastRoutedMode = null
@@ -329,6 +366,8 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 return@launch
             }
+
+            loadedSiteId = siteDocumentId
 
             val geofence = geofenceRepository.getGeofenceForSite(site.siteId)
 
@@ -405,6 +444,9 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         routeRequestJob = null
         lastRoutedMode = null
         secondsPerMeter = null
+        hasBeenOnRoute = false
+        finalWalkMeters = 0f
+        finalWalkSeconds = 0.0
 
         val mode = _uiState.value.travelMode
 
@@ -422,6 +464,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             routeNotice = null,
             routeAttribution = null,
             commuteSteps = emptyList(),
+            finalWalkPoints = emptyList(),
             nextInstruction = null
         )
 
@@ -461,7 +504,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 // route preview used to stay on "--" forever. Ask for a
                 // current fix instead.
                 fusedLocationClient
-                    .getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+                    .getCurrentLocation(locationPriority(), null)
                     .addOnSuccessListener { current: Location? ->
                         if (current != null) useLocation(current)
                     }
@@ -507,6 +550,9 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         // and walk the current route's steps from the very first maneuver.
         bearingSmoother.reset()
         routeStepTracker.setRoute(lastAppliedManeuverSteps, _uiState.value.travelMode)
+        // A new session must first reach the route before it can leave it.
+        hasBeenOnRoute = false
+        offRouteStreak = 0
 
         refreshNavInstruction()
 
@@ -566,7 +612,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val locationRequest = LocationRequest.Builder(
-            Priority.PRIORITY_HIGH_ACCURACY,
+            locationPriority(),
             3_000L
         )
             .setMinUpdateIntervalMillis(2_000L)
@@ -580,6 +626,19 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
         gpsCourseUntilMs = 0L
         compass.start { heading -> onCompassHeading(heading) }
+    }
+
+    /**
+     * GPS-level accuracy when the visitor allowed precise location; with
+     * only approximate location allowed, a balanced request (asking for
+     * high accuracy then can't be honoured anyway).
+     */
+    private fun locationPriority(): Int {
+        val hasFine = androidx.core.content.ContextCompat.checkSelfPermission(
+            getApplication(),
+            android.Manifest.permission.ACCESS_FINE_LOCATION
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        return if (hasFine) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY
     }
 
     private fun stopLiveLocationUpdates() {
@@ -646,25 +705,43 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             speedKmh = updateSpeed(location)?.let { it * 3.6 }
         )
 
+        val drivePoints = _uiState.value.routePoints
+        val walkPoints = _uiState.value.finalWalkPoints
+
         val progress = projectOntoRoute(
-            _uiState.value.routePoints,
+            drivePoints,
             location.latitude,
             location.longitude
         )
+
+        // Car / motorcycle with a drop-off: distance left and "off route"
+        // are measured along the drive AND the walk to the entrance, so
+        // walking from the drop-off isn't mistaken for leaving the route.
+        val fullProgress = if (walkPoints.size >= 2 && drivePoints.size >= 2) {
+            projectOntoRoute(drivePoints + walkPoints, location.latitude, location.longitude)
+        } else {
+            progress
+        }
 
         if (progress != null) {
             _uiState.value = _uiState.value.copy(remainingRoutePoints = progress.remainingPoints)
         }
 
-        updateRemainingDistanceLive(progress?.remainingMeters)
+        updateRemainingDistanceLive(fullProgress?.remainingMeters)
         updateVoiceGuidance(location)
         refreshNavInstruction()
 
         val now = System.currentTimeMillis()
 
-        offRouteStreak = if (isOffRoute(location, progress)) offRouteStreak + 1 else 0
+        offRouteStreak = if (isOffRoute(location, fullProgress)) offRouteStreak + 1 else 0
 
-        if (offRouteStreak >= OFF_ROUTE_CONFIRMATIONS && now - lastRerouteAtMs > REROUTE_COOLDOWN_MS) {
+        // A reroute still being fetched: don't cancel it with another one
+        // (on a weak signal each request can outlast the cooldown).
+        val rerouteInFlight = _uiState.value.isRerouting && routeRequestJob?.isActive == true
+
+        if (offRouteStreak >= OFF_ROUTE_CONFIRMATIONS && !rerouteInFlight &&
+            now - lastRerouteAtMs > REROUTE_COOLDOWN_MS
+        ) {
 
             // Left the route: fetch a new one from here straight away
             // instead of waiting for the next 20-second refresh.
@@ -714,7 +791,14 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         // A fix this imprecise can't tell on-route from off-route.
         if (location.hasAccuracy() && location.accuracy > limit) return false
 
-        return progress.offRouteMeters > limit
+        if (progress.offRouteMeters <= limit) {
+            hasBeenOnRoute = true
+            return false
+        }
+
+        // Never reached this route yet (it starts at a road further away
+        // than the limit): not "left" it, so no reroute.
+        return hasBeenOnRoute
     }
 
     /** Rebuilds the banner's "next turn" from the step tracker and the current position. */
@@ -938,9 +1022,7 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
 
         val shownMeters = routeRemainingMeters ?: straightLineMeters
 
-        val liveEta = secondsPerMeter
-            ?.let { ceil(shownMeters * it / 60.0).toInt().coerceAtLeast(1) }
-            ?: currentState.etaMinutes
+        val liveEta = liveEtaMinutes(shownMeters) ?: currentState.etaMinutes
 
         _uiState.value = currentState.copy(
             distanceMeters = shownMeters,
@@ -967,6 +1049,32 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         if (hasArrived) {
             stopLiveLocationUpdates()
         }
+    }
+
+    /**
+     * Minutes left for [remainingMeters] of route. The last [finalWalkMeters]
+     * (a car trip's walk from the drop-off) count at walking pace, the rest
+     * at the route's own pace; one blended pace made the walk look like
+     * seconds. Null before any route has given a pace.
+     */
+    private fun liveEtaMinutes(remainingMeters: Float): Int? {
+        val routePace = secondsPerMeter ?: return null
+        val walkLeft = minOf(remainingMeters, finalWalkMeters)
+        val walkPace = if (finalWalkMeters > 0f) finalWalkSeconds / finalWalkMeters else routePace
+        val seconds = (remainingMeters - walkLeft) * routePace + walkLeft * walkPace
+        return ceil(seconds / 60.0).toInt().coerceAtLeast(1)
+    }
+
+    /** Length of a drawn line, in metres. */
+    private fun pathLengthMeters(points: List<LatLng>): Float {
+        var total = 0f
+        for (i in 0 until points.size - 1) {
+            total += distanceBetween(
+                points[i].latitude, points[i].longitude,
+                points[i + 1].latitude, points[i + 1].longitude
+            )
+        }
+        return total
     }
 
     private fun fetchWalkingRouteIfReady() {
@@ -1017,12 +1125,34 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                     null
                 }
 
+                // Car / motorcycle to a drop-off point: the walk from there to
+                // the entrance used to be dropped, so the trip "ended" at the
+                // drop-off with 0 m left. Only used when the server sent its
+                // line, so what's counted is also what's drawn.
+                val walkPoints = directionsResult.finalWalkPoints.takeIf { it.size >= 2 }.orEmpty()
+                finalWalkMeters = if (walkPoints.isEmpty()) {
+                    0f
+                } else {
+                    directionsResult.finalWalkDistanceMeters.takeIf { it > 0 }?.toFloat()
+                        ?: pathLengthMeters(walkPoints)
+                }
+                finalWalkSeconds = if (walkPoints.isEmpty()) {
+                    0.0
+                } else {
+                    directionsResult.finalWalkDurationSeconds.takeIf { it > 0 }?.toDouble()
+                        ?: (finalWalkMeters / AVERAGE_WALKING_SPEED_METERS_PER_SECOND).toDouble()
+                }
+
+                // A new route must be reached before it can be left.
+                hasBeenOnRoute = false
+
                 _uiState.value = _uiState.value.copy(
                     isRouteLoading = false,
                     isRerouting = false,
                     remainingRoutePoints = directionsResult.routePoints,
-                    distanceMeters = directionsResult.distanceMeters.toFloat(),
-                    etaMinutes = ceil(directionsResult.durationSeconds / 60.0)
+                    finalWalkPoints = walkPoints,
+                    distanceMeters = directionsResult.distanceMeters.toFloat() + finalWalkMeters,
+                    etaMinutes = ceil((directionsResult.durationSeconds + finalWalkSeconds) / 60.0)
                         .toInt()
                         .coerceAtLeast(1),
                     routePoints = directionsResult.routePoints,
@@ -1044,6 +1174,9 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
                 )
 
                 lastRoutedMode = currentState.travelMode
+                // The route on screen is fresh: the first GPS fix after
+                // Start doesn't need to fetch it again straight away.
+                lastRouteRefreshAtMs = System.currentTimeMillis()
 
                 applyRouteStepsForVoiceGuidance(directionsResult.steps, currentState.travelMode)
 
@@ -1110,7 +1243,14 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         // leave the previous mode's announce distances in effect.
         routeStepTracker.updateTravelMode(travelMode)
 
-        val newSignature = steps.map { it.maneuver }
+        // Each turn's position too, not just its name: a reroute or a
+        // mode switch often returns the same names (DEPART, TURN_LEFT,
+        // TURN_RIGHT) at different corners, and the tracker must take the
+        // new corners. The first step starts at the visitor, so it's left
+        // out (it moves with every refresh).
+        val newSignature = listOf("steps=${steps.size}") + steps.drop(1).map {
+            "${it.maneuver}@${String.format(java.util.Locale.US, "%.4f,%.4f", it.startLatitude, it.startLongitude)}"
+        }
 
         if (newSignature == lastAppliedManeuverSignature) {
             return
@@ -1172,6 +1312,10 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         secondsPerMeter = 1.0 / speedMetersPerSecond
+        // No real route, so no drop-off walk either.
+        finalWalkMeters = 0f
+        finalWalkSeconds = 0.0
+        hasBeenOnRoute = false
 
         _uiState.value = _uiState.value.copy(
             isRouteLoading = false,
@@ -1184,8 +1328,10 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
             routeTargetLatitude = null,
             routeTargetLongitude = null,
             entranceName = null,
+            routeNotice = null,
             routeAttribution = null,
             commuteSteps = emptyList(),
+            finalWalkPoints = emptyList(),
             errorMessage = when (reason) {
                 com.histoury.app.data.repository.DirectionsFailure.NO_ROUTE ->
                     if (mode == TravelMode.COMMUTE && com.histoury.app.map.MapConfig.useMapLibre) {

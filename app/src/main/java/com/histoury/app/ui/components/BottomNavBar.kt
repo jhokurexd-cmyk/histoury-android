@@ -1,5 +1,6 @@
 package com.histoury.app.ui.components
 
+import com.histoury.app.theme.softShadow
 import com.histoury.app.ui.tutorial.tutorialTarget
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -338,7 +339,7 @@ fun BottomNavBar(
                 // shadow the pill dissolves into the screen. GlassShadow is
                 // transparent in dark mode, where being lighter than the
                 // page already does that job.
-                .shadow(
+                .softShadow(
                     elevation = 22.dp,
                     shape = BAR_SHAPE,
                     ambientColor = GlassShadow,
@@ -518,7 +519,7 @@ private fun CenterItineraryButton(
                 .tutorialTarget("nav_" + Routes.Itinerary.route)
                 .size(CENTER_BUTTON_SIZE)
                 .scale(haloScale)
-                .shadow(elevation = 10.dp, shape = CircleShape)
+                .softShadow(elevation = 10.dp, shape = CircleShape)
                 .clip(CircleShape)
                 .background(Primary)
                 // A soft gloss over the top half, matching the sheen on

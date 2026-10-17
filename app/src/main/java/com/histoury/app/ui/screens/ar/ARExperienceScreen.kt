@@ -128,6 +128,7 @@ import com.google.ar.core.Pose
 import com.google.ar.core.Session
 import com.histoury.app.data.viewmodel.ArExperienceViewModel
 import com.histoury.app.data.viewmodel.ArStage
+import com.histoury.app.data.viewmodel.FenceStatus
 import com.histoury.app.data.viewmodel.ArUiState
 import com.histoury.app.navigation.Routes
 import com.histoury.app.theme.SurfaceSoft
@@ -149,6 +150,7 @@ import io.github.sceneview.rememberMainLightNode
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.repeatOnLifecycle
 import dev.romainguy.kotlin.math.Float3
 import dev.romainguy.kotlin.math.Float4
 import dev.romainguy.kotlin.math.Quaternion
@@ -345,6 +347,13 @@ fun ARExperienceScreen(
         locationAsked = true
     }
 
+    // Bumped by "Try again" on the outside-site screen, purely to re-key the
+    // gate below so it runs again. Without it that effect's keys are all
+    // unchanged after a refusal — same site, same permission — so nothing
+    // would re-trigger it and the refusal would be final for the life of the
+    // screen, which is precisely what made a single bad fix feel like a lock.
+    var geofenceRetryToken by remember { mutableStateOf(0) }
+
     // Coming back from the app's settings page: re-read the real permission
     // state (it may or may not have been granted there).
     val locationSettingsLauncher = rememberLauncherForActivityResult(
@@ -354,6 +363,9 @@ fun ARExperienceScreen(
             context, Manifest.permission.ACCESS_FINE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
         locationAsked = true
+        // Re-run the location check even if nothing changed in Settings;
+        // the screen was left on "checking" and would spin forever.
+        geofenceRetryToken++
     }
 
     // Whether the device is physically inside THIS site's own geofence.
@@ -371,13 +383,6 @@ fun ARExperienceScreen(
     // false means the screen has already moved to ArStage.OUTSIDE_GEOFENCE
     // with an explanation the visitor can act on.
     var geofenceCheckPassed by remember { mutableStateOf<Boolean?>(null) }
-
-    // Bumped by "Try again" on the outside-site screen, purely to re-key the
-    // gate below so it runs again. Without it that effect's keys are all
-    // unchanged after a refusal — same site, same permission — so nothing
-    // would re-trigger it and the refusal would be final for the life of the
-    // screen, which is precisely what made a single bad fix feel like a lock.
-    var geofenceRetryToken by remember { mutableStateOf(0) }
 
     val fusedLocationClient = remember {
         LocationServices.getFusedLocationProviderClient(context)
@@ -417,6 +422,9 @@ fun ARExperienceScreen(
         cameraGranted = ContextCompat.checkSelfPermission(
             context, Manifest.permission.CAMERA
         ) == PackageManager.PERMISSION_GRANTED
+        // Still not granted: bring the explanation back instead of leaving
+        // an endless spinner (the effect below wouldn't run again).
+        if (!cameraGranted) showCameraSettingsExplanation = true
     }
 
     LaunchedEffect(cameraGranted, cameraPermissionAsked) {
@@ -508,19 +516,29 @@ fun ARExperienceScreen(
             }
 
             // Asked and refused. verifyGeofence(null) decides what that
-            // means: a site with no fence is still allowed through, and a
-            // fenced site is blocked with an explanation rather than a
-            // spinner.
+            // means: only a site the server confirms has no fence is
+            // allowed through; a fenced site, or one whose fence couldn't
+            // be looked up, is blocked with an explanation and Try again.
             geofenceCheckPassed = viewModel.verifyGeofence(null)
             return@LaunchedEffect
         }
 
-        // Settle the fence before spending any fixes on it. An unfenced
-        // site still fails open, exactly as before — there is nothing to be
-        // outside of, so there is nothing worth asking the GPS.
-        if (!viewModel.ensureGeofenceResolved()) {
-            geofenceCheckPassed = true
-            return@LaunchedEffect
+        // Settle the fence before spending any fixes on it. A site the
+        // server confirms has no fence is allowed, as before — there is
+        // nothing to be outside of. A failed lookup is NOT treated as "no
+        // fence" any more: that let AR open anywhere whenever Firestore
+        // couldn't answer. It blocks, with Try again.
+        when (viewModel.ensureGeofenceResolved()) {
+            FenceStatus.UNFENCED -> {
+                geofenceCheckPassed = true
+                return@LaunchedEffect
+            }
+            FenceStatus.UNKNOWN -> {
+                viewModel.onGeofenceLookupFailed()
+                geofenceCheckPassed = false
+                return@LaunchedEffect
+            }
+            FenceStatus.FENCED -> Unit
         }
 
         // Several fixes, not one.
@@ -590,7 +608,9 @@ fun ARExperienceScreen(
     //
     // Even when it does fire, nothing already placed is disturbed: this only
     // blocks a NEW placement. See ArUiState.leftSiteArea.
-    LaunchedEffect(geofenceCheckPassed, locationGranted) {
+    val boundaryLifecycleOwner = LocalLifecycleOwner.current
+
+    LaunchedEffect(geofenceCheckPassed, locationGranted, boundaryLifecycleOwner) {
 
         if (geofenceCheckPassed != true || !locationGranted) return@LaunchedEffect
         if (!viewModel.hasResolvedGeofence()) return@LaunchedEffect
@@ -601,6 +621,9 @@ fun ARExperienceScreen(
         // same one cannot be counted twice.
         var lastCountedFixNanos = 0L
 
+        // Only while the screen is visible: in the background this used to
+        // keep asking for a high-accuracy fix every few seconds for nothing.
+        boundaryLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
         while (true) {
 
             kotlinx.coroutines.delay(GEOFENCE_WATCH_INTERVAL_MS)
@@ -638,6 +661,7 @@ fun ARExperienceScreen(
                     viewModel.onSustainedGeofenceExit()
                 }
             }
+        }
         }
     }
 
@@ -4321,15 +4345,21 @@ private const val GEOFENCE_CACHED_FIX_MAX_AGE_MS = 2 * 60 * 1_000L
  * asked for a position since. `getCurrentLocation` asks for where the phone
  * is now.
  */
-private suspend fun freshFix(client: FusedLocationProviderClient): Location? =
-    try {
+private suspend fun freshFix(client: FusedLocationProviderClient): Location? {
+    // Cancelled with the coroutine (leaving the AR screen), so a GPS request
+    // still running doesn't carry on in the background.
+    val cancellation = CancellationTokenSource()
+    return try {
         client.getCurrentLocation(
             Priority.PRIORITY_HIGH_ACCURACY,
-            CancellationTokenSource().token
-        ).await()
+            cancellation.token
+        ).await(cancellation)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
     } catch (e: Exception) {
         null
     }
+}
 
 /**
  * The cached fix, but only if it is recent enough to still describe where
